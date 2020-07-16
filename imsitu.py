@@ -128,6 +128,7 @@ class imSituVerbRoleNounEncoder:
     self.mr = 0
  
     self.v_r = {} 
+    self.r_n = {}
 
     for (image, annotation) in dataset.items():
       v = annotation["verb"]
@@ -143,6 +144,7 @@ class imSituVerbRoleNounEncoder:
             _id = len(self.r_id)
             self.r_id[r] = _id
             self.id_r[_id] = r
+            self.r_n[_id]  = []
 
           if n not in self.n_id: 
             _id = len(self.n_id)
@@ -151,12 +153,15 @@ class imSituVerbRoleNounEncoder:
  
           rid = self.r_id[r]
           if rid not in self.v_r[vid]: self.v_r[vid].append(rid)                    
+          nid = self.n_id[n]
+          if nid not in self.r_n[rid]: self.r_n[rid].append(nid)                    
   
     for (v,rs) in self.v_r.items(): 
       if len(rs) > self.mr : self.mr = len(rs)
     
     for (v, vid) in self.v_id.items():  self.v_r[vid] = sorted(self.v_r[vid])
 
+    for (r, rid) in self.r_id.items():  self.r_n[rid] = sorted(self.r_n[rid])
    
   def encode(self, situation):
     rv = {}
@@ -308,6 +313,28 @@ class imSituVerbRoleLocalNounEncoder(imSituVerbRoleNounEncoder):
         _fr[r]=n
       rv["frames"].append(_fr)
     return rv 
+
+class imSituVerbLocalRoleNounEncoder(imSituVerbRoleLocalNounEncoder):
+  
+  def n_rolenoun(self): return len(self.rn_id)
+ 
+  def __init__(self, dataset):
+    super(imSituVerbRoleLocalNounEncoder, self).__init__(dataset)
+    self.rn_id = {}
+    self.id_rn = {}
+
+    for (image, annotation) in dataset.items():
+      v = self.v_id[annotation["verb"]]
+  
+      for frame in annotation["frames"]:
+        for(r,n) in frame.items(): 
+          r = self.r_id[r]
+          n = self.n_id[n]
+
+          if (r,n) not in self.rn_id:
+            _id = len(self.rn_id)
+            self.rn_id[(r,n)] = _id
+            self.id_rn[_id] = (r,n)
 
 class imSituSimpleImageFolder(data.Dataset):
  # partially borrowed from ImageFolder dataset, but eliminating the assumption about labels
