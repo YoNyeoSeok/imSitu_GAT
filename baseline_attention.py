@@ -61,7 +61,7 @@ class baseline_attention(nn.Module):
         self.pad_v_r = torch.LongTensor(self.pad_v_r).cuda()
 
         # node representaion
-        self.linear_vr = nn.Linear(self.rep_size, (1+self.encoding.n_roles())*self.hidden[0])
+        self.linear_r = nn.Linear(self.rep_size, self.encoding.n_roles()*self.hidden[0])
 
         # attention module
         if len(hidden) > 1:
@@ -74,7 +74,7 @@ class baseline_attention(nn.Module):
         #         [nn.modules.activation.MultiheadAttention(self.hidden[i], self.hidden[i+1])])
 
         # verb potential
-        self.linear_v = nn.Linear(self.hidden[-1], self.encoding.n_verbs())
+        self.linear_v = nn.Linear(self.rep_size, self.encoding.n_verbs())
         # role-noun potential
         # self.linear_rn = nn.ModuleDict({
         #     r: nn.Linear(self.hidden[-1], n) for r, n in self.encoding.r_n.items()
@@ -104,14 +104,14 @@ class baseline_attention(nn.Module):
         batch_size = image.size()[0]
 
         rep = self.cnn(image)
+        v_potential = self.linear_v(rep) # bsz x n_verbs
 
-        node_rep = self.linear_vr(rep).view(
-            -1, 1+self.encoding.n_roles(), self.hidden[-1]).transpose(0, 1)
+        node_rep = self.linear_r(rep).view(
+            -1, self.encoding.n_roles(), self.hidden[-1]).transpose(0, 1)
         for attention in self.attention:
             node_rep, _ = attention(node_rep, node_rep, node_rep)
-        v_potential = self.linear_v(node_rep[0]) # bsz x n_verbs
 
-        rn_potential = self.linear_n(node_rep[1:]) # roles x bsz x n_nouns
+        rn_potential = self.linear_n(node_rep) # roles x bsz x n_nouns
         # rn_potential = list(map(lambda n: rn_potential.index_select(1, n), self.r_n)) # roles x bsz x rn_nouns
         rn_potential_grouped = list(map(
             lambda r, n_potential: n_potential.index_select(1, self.r_n[r]),
