@@ -1,6 +1,7 @@
 import argparse
 import json
 import time
+import tqdm
 
 import torch
 from torch import optim
@@ -12,6 +13,7 @@ from imsitu import (imSituVerbRoleLocalNounEncoder,
                     imSituSimpleImageFolder,
                     )
 from baseline_crf import baseline_crf
+from baseline_attention import baseline_attention
 from utils import format_dict, predict_human_readable
 
 import wandb
@@ -53,7 +55,7 @@ def eval_model(dataset_loader, encoding, model):
     return (top1, top5) 
 
 
-def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, encoding, optimizer, save_dir, timing = False): 
+def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, encoding, optimizer, save_dir, device_array, timing = False): 
     model.train()
 
     time_all = time.time()
@@ -67,7 +69,8 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
     avg_scores = []
   
     for k in range(0,max_epoch):  
-        for i, (index, input, target) in enumerate(train_loader):
+        loop = tqdm.tqdm(enumerate(train_loader), total=len(train_loader))
+        for i, (index, input, target) in loop:
             total_steps += 1
       
             t0 = time.time()
@@ -123,18 +126,22 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
                 top5 = imSituTensorEvaluation(5, 3, encoding)
                 loss_total = 0
                 time_all = time.time()
+            loop.set_description("Epoch [{} / {}]".format(k, max_epoch))
+        torch.save(model.state_dict(), save_dir + "/Epoch_{0:2d}_end.model".format(k))   
+ 
+        
 
 def argparse_parser(parser=argparse.ArgumentParser()):
     parser.add_argument("--command", choices = ["train", "eval", "predict", "features"], required = True)
     parser.add_argument("--output_dir", help="location to put output, such as models, features, predictions")
     parser.add_argument("--image_dir", default="./resized_256", help="location of images to process")
     parser.add_argument("--dataset_dir", default="./", help="location of train.json, dev.json, ect.") 
+    parser.add_argument("--hidden", nargs='+', type=int, default=[32, 32, 32, 32], help="size of hidden layers")
     parser.add_argument("--weights_file", help="the model to start from")
     parser.add_argument("--encoding_file", help="a file corresponding to the encoder")
-    parser.add_argument("--hidden", default=[32, 32, 32, 32], help="size of hidden layers")
-    parser.add_argument("--cnn_type", choices=["resnet_34", "resnet_50", "resnet_101"], default="resnet_101", help="the cnn to initilize the crf with") 
+    parser.add_argument("--cnn_type", choices=["resnet_34", "resnet_50", "resnet_101", "vgg"], default="resnet_101", help="the cnn to initilize the crf with") 
     parser.add_argument("--batch_size", default=64, help="batch size for training", type=int)
-    parser.add_argument("--learning_rate", default=1e-5, help="learning rate for ADAM", type=float)
+    parser.add_argument("--learning_rate", default=1e-3, help="learning rate for ADAM", type=float)
     parser.add_argument("--weight_decay", default=5e-4, help="learning rate decay for ADAM", type=float)  
     parser.add_argument("--eval_frequency", default=500, help="evaluate on dev set every N training steps", type=int) 
     parser.add_argument("--training_epochs", default=20, help="total number of training epochs", type=int)
@@ -157,15 +164,15 @@ def main():
         dev_set = json.load(open(args.dataset_dir+"/dev.json"))
 
         if args.encoding_file is None: 
-            encoder = imSituVerbRoleLocalNounEncoder(train_set)
-            # encoder = imSituVerbRoleNounEncoder(train_set)
+            # encoder = imSituVerbRoleLocalNounEncoder(train_set)
+            encoder = imSituVerbRoleNounEncoder(train_set)
             torch.save(encoder, args.output_dir + "/encoder")
         else:
             encoder = torch.load(args.encoding_file)
       
         ngpus = 1
-        model = baseline_crf(encoder, cnn_type = args.cnn_type, ngpus = ngpus)
-        # model = baseline_attention(encoder, cnn_type = args.cnn_type, hidden = args.hidden, ngpus = ngpus)
+        # model = baseline_crf(encoder, cnn_type = args.cnn_type, ngpus = ngpus)
+        model = baseline_attention(encoder, cnn_type = args.cnn_type, hidden = args.hidden, ngpus = ngpus)
         
         if args.weights_file is not None:
             model.load_state_dict(torch.load(args.weights_file))
@@ -180,8 +187,14 @@ def main():
         dev_loader  = torch.utils.data.DataLoader(dataset_dev, batch_size = batch_size, shuffle = True) #, num_workers = 3) 
 
         model.cuda()
-        optimizer = optim.Adam(model.parameters(), lr = args.learning_rate , weight_decay = args.weight_decay)
-        train_model(args.training_epochs, args.eval_frequency, train_loader, dev_loader, model, encoder, optimizer, args.output_dir)
+        optimizer = optim.Adam([
+            {'params': model.cnn.parameters(), 'lr': 5e-5},
+            {'params': model.linear_r.parameters(), 'lr': args.learning_rate},
+            {'params': model.attention.parameters(), 'lr': args.learning_rate},
+            {'params': model.linear_v.parameters(), 'lr': args.learning_rate},
+            {'params': model.linear_n.parameters(), 'lr': args.learning_rate},
+            ], lr = args.learning_rate , weight_decay = args.weight_decay)
+        train_model(args.training_epochs, args.eval_frequency, train_loader, dev_loader, model, encoder, optimizer, args.output_dir, device_array)
       
     elif args.command == "eval":
         print ("command = evaluating")
