@@ -47,6 +47,7 @@ class baseline_attention(nn.Module):
         if cnn_type == "resnet_101" : self.cnn = resnet_modified_large()
         elif cnn_type == "resnet_50": self.cnn = resnet_modified_medium()
         elif cnn_type == "resnet_34": self.cnn = resnet_modified_small()
+        elif cnn_type == "vgg": self.cnn = vgg_modified()
         else: 
             print("unknown base network")
             exit()
