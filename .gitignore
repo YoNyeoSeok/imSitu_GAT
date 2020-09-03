@@ -136,3 +136,6 @@ resized.tar
 resized_256/
 baseline_models/
 *save_dir/
+
+# backbone
+train_backbone_result*
