@@ -245,7 +245,7 @@ def train_batch(model, train_criteria, optimizer, input_, situ, args):
     loss = train_criteria(pred, target)
     loss.backward()
     optimizer.step()
-    return {'loss': loss.detach().item()}
+    return {'{}_loss'.format(args.predict): loss.detach().item()}
 
 
 def evaluation(model, eval_criteria, eval_metric, eval_loader, args):
@@ -350,8 +350,9 @@ def main():
         return {'correct': correct}
 
     def IoU_metric(pred, target):
-        IoU = torch.sum((pred >= 0.5) == target.bool()) / \
+        IoU = torch.sum((pred >= 0.5) * target.bool()) / \
             torch.sum((pred >= 0.5) + target.bool())
+        IoU /= float(pred.shape[1])
         return {'IoU': IoU}
 
     if args.predict in ["verb", "frame"]:
