@@ -13,6 +13,7 @@ import torchvision as tv
 
 from imsitu import imSituSituation
 from baseline_crf import vgg_modified as VGGModified
+from utils import vgg_bn_modified as VGGBNModified
 import wandb
 # , predict_n_loss="mil"
 #         self.predict_n_loss = predict_n_loss
@@ -22,6 +23,7 @@ import wandb
 #                 self.loss = self.sum_loss
 #             else:
 #                 assert False, "Wrong predict_n_loss"
+
 
 class imSituVerbRoleNounUNKEncoder:
 
@@ -87,7 +89,8 @@ class imSituVerbRoleNounUNKEncoder:
                 if vid not in self.fr_v[fr]:
                     self.fr_v[fr].append(vid)
 
-        sorted_n_count = sorted(self.n_count.items(), key=lambda x: x[1], reverse=True)
+        sorted_n_count = sorted(self.n_count.items(),
+                                key=lambda x: x[1], reverse=True)
         for n, _ in sorted_n_count[:top_n_noun]:
             _id = len(self.n_id)
             self.n_id[n] = _id
@@ -99,7 +102,7 @@ class imSituVerbRoleNounUNKEncoder:
 
         for (v, vid) in self.v_id.items():
             self.v_r[vid] = sorted(self.v_r[vid])
-        
+
     def encode(self, situation):
         rv = {}
         verb = self.v_id[situation["verb"]]
@@ -169,25 +172,26 @@ class imSituVerbRoleNounUNKEncoder:
         return rv
 
 
-class BackBone(nn.Module):
+class Backbone(nn.Module):
     def train_preprocess(self): return self.train_transform
     def dev_preprocess(self): return self.dev_transform
 
-    def __init__(self, encoding, cnn_type):
-        super(BackBone, self).__init__()
+    def __init__(self, encoding, cnn_type, num_class=10):
+        super(Backbone, self).__init__()
         self.encoding = encoding
-
-        self.criteria = nn.CrossEntropyLoss(ignore_index=-1)
-        self.criteria_ = nn.CrossEntropyLoss(ignore_index=-1, reduction='sum')
 
         if cnn_type == "vgg":
             self.cnn = VGGModified()
+        elif cnn_type == "vgg_bn":
+            self.cnn = VGGBNModified()
         self.rep_size = self.cnn.rep_size()
 
-        self.linear_v = nn.Linear(self.rep_size, self.encoding.n_verbs())
-        self.linear_n = nn.Linear(self.rep_size, self.encoding.n_nouns())
-        self.linear_r = nn.Linear(self.rep_size, self.encoding.n_roles())
-        self.linear_f = nn.Linear(self.rep_size, self.encoding.n_frames())
+        self.classifier = nn.Sequential(
+            nn.Linear(self.rep_size, 512),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(512, num_class),
+        )
 
         self.normalize = tv.transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -204,123 +208,87 @@ class BackBone(nn.Module):
             tv.transforms.CenterCrop(224),
             tv.transforms.ToTensor(),
             self.normalize,
-        ])                
+        ])
 
-    def forward(self, image, predict):
+    def forward(self, image):
         rep = self.cnn(image)
+        return self.classifier(rep)
 
-        res = {}
-        if "verb" in predict:
-            res["verb"] = self.linear_v(rep)
-        if "noun" in predict:
-            res["noun"] = self.linear_n(rep)    
-        if "role" in predict:
-            res["role"] = self.linear_r(rep)    
-        if "frame" in predict:
-            res["frame"] = self.linear_f(rep)    
-        return res
-    
-def train_batch(model, optimizer, input_, target, args):
+
+def situ2target(situ, predict, encoder):
+    if predict == 'verb':
+        target = situ[:, 0]
+    elif predict == 'noun':
+        target = torch.zeros((situ.shape[0], encoder.n_nouns()+1))
+        target.scatter_(1, situ[2::2]+1, torch.ones_like(situ[:, 2::2]))
+        target = target[:, 1:]
+    elif predict == 'role':
+        target = torch.zeros((situ.shape[0], encoder.n_roles()+1))
+        target.scatter_(1, situ[1::2]+1, torch.ones_like(situ[:, 1::2]))
+        target = target[:, 1:]
+    elif predict == 'frame':
+        target = torch.tensor([
+            encoder.fr_id[frozenset([fr for fr in trg if fr >= 0])]
+            for trg in situ[:, 1::2].cpu().tolist()]).to(situ.device)
+    return target
+
+
+def train_batch(model, train_criteria, optimizer, input_, situ, args):
     res = {}
     optimizer.zero_grad()
-    pred = model(input_, args.predict)
-    if "verb" == args.predict:
-        loss = model.criteria(pred["verb"], target[:, 0])
-        loss.backward()
-        optimizer.step()
-        res['verb_loss'] = loss.detach().item()
-    if "role" == args.predict:
-        loss = model.criteria(pred["role"].repeat(18, 1), target[:, 1::2].transpose(0, 1).flatten())
-        loss.backward()
-        optimizer.step()
-        res['role_loss'] = loss.detach().item()
-    if "frame" == args.predict:
-        fr_target = torch.tensor([
-            model.encoding.fr_id[frozenset([fr for fr in trg if fr >= 0])]
-            for trg in target[:, 1::2].cpu().tolist()]).to(args.gpu)
-        loss = model.criteria(pred["frame"], fr_target)
-        loss.backward()
-        optimizer.step()
-        res['frame_loss'] = loss.detach().item()
-    if "noun" == args.predict:
-        loss = model.criteria(pred["noun"].repeat(18, 1), target[:, 2::2].transpose(0, 1).flatten())
-        loss.backward()
-        optimizer.step()
-        res['noun_loss'] = loss.detach().item()
-    return res
+    pred = model(input_)
+    target = situ2target(situ.to(pred.device), args.predict, model.encoding)
+    loss = train_criteria(pred, target)
+    loss.backward()
+    optimizer.step()
+    return loss.detach().item()
 
-def evaluation(model, eval_loader, args):
+
+def evaluation(model, eval_criteria, eval_metric, eval_loader, args):
     with torch.no_grad():
         eval_loop = tqdm(eval_loader, total=len(eval_loader))
         # eval_loop = eval_loader
-        columns = ["Target vid", "Target verb", "Top 10 Pred vid", "Top 10 Pred verb"]
+        columns = ["Target vid", "Target verb",
+                   "Top 10 Pred vid", "Top 10 Pred verb"]
         pd_res = pd.DataFrame(columns=columns)
-        res = {"total": 0, 
+        res = {"total": 0,
                "verb_loss": .0, "verb_correct": 0,
-               "noun_loss": .0, "noun_correct": 0, #"noun_all_correct": 0,
-               "role_loss": .0, "role_correct": 0, #"role_all_correct": 0,
+               "noun_loss": .0, "noun_IoU": 0,  # "noun_all_correct": 0,
+               "role_loss": .0, "role_IoU": 0,  # "role_all_correct": 0,
                "frame_loss": .0, "frame_correct": 0}
-        for idx, img, target in eval_loop:
+        for idx, img, situ in eval_loop:
             batch_size = img.shape[0]
             input_ = img.to(args.gpu)
-            target = target.to(args.gpu)
+            pred = model(input_)
 
-            pred = model(input_, args.predict)
-            res["total"] += batch_size
-            if "verb" == args.predict:
-                loss = model.criteria_(pred["verb"], target[:, 0])
-                acc = pred["verb"].argmax(1) == target[:, 0]
-                print(pred['verb'].argmax(1)[:10])
-                print(target[:, 0][:10])
-                print(acc[:10])
-                res['verb_loss'] += loss.detach().item()
-                res['verb_correct'] += acc.sum()
-            
-            if "role" == args.predict:
-                loss = model.criteria_(pred["role"].repeat(18, 1), target[:, 1::2].transpose(0, 1).flatten())
-                res['role_loss'] += loss.detach().item()                
-                for bidx in range(batch_size):
-                    pred_argmax = pred["role"][bidx].argmax().cpu().item()
-                    role_target = [n for n in target[bidx, 1::2].cpu().tolist() if n >= 0]
-                    res["role_correct"] += pred_argmax in role_target
+            target = situ2target(situ.to(pred.device),
+                                 args.predict, model.encoding)
+            loss = eval_criteria(pred, target)
+            res['{}_loss'.format(args.predict)] += loss.detach().item()
 
-            if "noun" == args.predict:
-                loss = model.criteria_(pred["noun"].repeat(18, 1), target[:, 2::2].transpose(0, 1).flatten())
-                res['noun_loss'] += loss.detach().item()                
-                for bidx in range(batch_size):
-                    pred_argmax = pred["noun"][bidx].argmax().cpu().item()
-                    noun_target = [n for n in target[bidx, 2::2].cpu().tolist() if n >= 0]
-                    res["noun_correct"] += pred_argmax in noun_target
-                #     noun_target = [n for n in target[bidx, 2::2] if n >= 0]
-                #     sorted_pred = sorted(range(len(pred["noun"][bidx])), key=lambda k: pred["noun"][bidx][k], reverse=True)[:6]
-                #     acc = np.array(sorted_pred) == np.array(noun_target)
-                #     res['noun_correct'] += acc.sum()
-                #     res['noun_all_correct'] += acc.all()
-            
-            if "frame" == args.predict:
-                fr_target = torch.tensor([
-                    model.encoding.fr_id[frozenset([fr for fr in trg if fr >= 0])]
-                    for trg in target[:, 1::2].cpu().tolist()]).to(args.gpu)
-                loss = model.criteria_(pred["frame"], fr_target)
-                acc = pred["frame"].argmax(1) == fr_target
-                res['frame_loss'] += loss.detach().item()
-                res['frame_correct'] += acc.sum()
+            metric = eval_metric(pred, target)
+            for k in metric:
+                res['{}_{}'.format(args.predict, k)] += metric[k].sum()
 
-        epoch_res = {k: res[k]/res['total'] for k, v in res.items() if args.predict in k}
+            res['total'] += batch_size
+
+        epoch_res = {k: res[k]/res['total']
+                     for k, v in res.items() if args.predict in k}
     return epoch_res
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--predict', choices=["verb", "noun", "role", "frame"], default="role")
+    parser.add_argument(
+        '--predict', choices=["verb", "noun", "role", "frame"], default="role")
     parser.add_argument('--predict_top_k_noun', type=int, default=2000)
-    parser.add_argument('--cnn-type', choices=['vgg'], default='vgg')
+    parser.add_argument('--cnn-type', choices=['vgg', 'vgg_bn'], default='vgg')
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--use-wandb', action='store_true')
     parser.add_argument('--encoding-file')
     parser.add_argument('--dataset-dir', default='./')
     parser.add_argument('--image-dir', default='./resized_256/')
-    parser.add_argument('--output-dir', default='./test_backbone_result/')
+    parser.add_argument('--output-dir', default='./train_backbone_result/')
     parser.add_argument('--num-epoch', type=int, default=50)
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--weight-decay', type=float, default=5e-4)
@@ -332,14 +300,25 @@ def main():
     dev_set = json.load(open(args.dataset_dir+"/dev.json"))
 
     if args.encoding_file is None:
-        encoder = imSituVerbRoleNounUNKEncoder(train_set, args.predict_top_k_noun)
+        encoder = imSituVerbRoleNounUNKEncoder(
+            train_set, args.predict_top_k_noun)
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
         torch.save(encoder, args.output_dir + "/encoder")
     else:
         encoder = torch.load(args.encoding_file)
 
     if args.use_wandb:
         wandb.init(project='imSitu_YYS', name=args.predict, config=args)
-    model = BackBone(encoder, args.cnn_type)
+    if args.predict == 'verb':
+        num_class = encoder.n_verbs()
+    elif args.predict == 'noun':
+        num_class = encoder.n_nouns()
+    elif args.predict == 'role':
+        num_class = encoder.n_roles()
+    elif args.predict == 'frame':
+        num_class = encoder.n_frames()
+    model = Backbone(encoder, args.cnn_type, num_class)
 
     dataset_train = imSituSituation(
         args.image_dir, train_set, encoder, model.train_preprocess())
@@ -358,35 +337,60 @@ def main():
 
     optimizer = optim.Adam(
         [{'params': model.cnn.parameters(), 'lr': 5e-5},
-         {'params': model.linear_v.parameters(), 'lr': args.learning_rate},
-         {'params': model.linear_n.parameters(), 'lr': args.learning_rate},
-         {'params': model.linear_r.parameters(), 'lr': args.learning_rate},
-         {'params': model.linear_f.parameters(), 'lr': args.learning_rate},
-        ],
-        lr = args.learning_rate , weight_decay = args.weight_decay)
+         {'params': model.classifier.parameters(), 'lr': args.learning_rate},
+         ],
+        lr=args.learning_rate, weight_decay=args.weight_decay)
+
+    def correct_metric(pred, target):
+        correct = pred.argmax(1) == target
+        return {'correct': correct}
+
+    def IoU_metric(pred, target):
+        IoU = torch.sum((pred >= 0.5) == target.bool()) / \
+            torch.sum((pred >= 0.5) + target.bool())
+        return {'IoU': IoU}
+
+    if args.predict in ["verb", "frame"]:
+        train_criteria = nn.CrossEntropyLoss()
+        eval_criteria = nn.CrossEntropyLoss(reduction='sum')
+        eval_metric = correct_metric
+    elif args.predict in ["noun", "role"]:
+        train_criteria = nn.BCELoss()
+        eval_criteria = nn.BCELoss(reduction='sum')
+        eval_metric = IoU_metric
+    else:
+        assert False
 
     for epoch in range(args.num_epoch):
-        eval_res = evaluation(model, dev_loader, args)
-        print({k: '{:.4f}'.format(v) for k, v in eval_res.items() if k != 'total'})
+        eval_res = evaluation(model, eval_criteria,
+                              eval_metric, dev_loader, args)
+        print({k: '{:.4f}'.format(v)
+               for k, v in eval_res.items() if k != 'total'})
         if args.use_wandb:
             wandb.log({"Eval {}".format(k): v for k, v in eval_res.items()})
 
         train_loop = tqdm(train_loader, total=len(train_loader))
         # train_loop = train_loader
         for idx, img, target in train_loop:
-            train_res = train_batch(model, optimizer, img.to(args.gpu), target.to(args.gpu), args)
+            train_res = train_batch(
+                model, train_criteria, optimizer,
+                img.to(args.gpu), target.to(args.gpu), args)
             if args.use_wandb:
-                wandb.log({"Train {}".format(k): v for k, v in train_res.items()})
+                wandb.log({"Train {}".format(k): v
+                           for k, v in train_res.items()})
 
-        torch.save(model.state_dict(), "{}/Epoch{:02d}".format(args.output_dir, epoch))
+        torch.save(model.state_dict(),
+                   "{}/Epoch{:02d}".format(args.output_dir, epoch))
         if args.use_wandb:
-            torch.save(model.state_dict(), "{}/Epoch{:02d}".format(wandb.run.dir, epoch))
+            torch.save(model.state_dict(),
+                       "{}/Epoch{:02d}".format(wandb.run.dir, epoch))
         # break
 
-    eval_res = evaluation(model, dev_loader, args)
+    eval_res = evaluation(model, eval_criteria, eval_metric, dev_loader, args)
     print({k: '{:.4f}'.format(v) for k, v in eval_res.items() if k != 'total'})
     if args.use_wandb:
         wandb.log({"Eval {}".format(k): v for k, v in eval_res.items()})
-    
+
+
 if __name__ == "__main__":
     main()
