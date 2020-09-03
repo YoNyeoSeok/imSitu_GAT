@@ -219,12 +219,16 @@ def situ2target(situ, predict, encoder):
     if predict == 'verb':
         target = situ[:, 0]
     elif predict == 'noun':
-        target = torch.zeros((situ.shape[0], encoder.n_nouns()+1))
-        target.scatter_(1, situ[2::2]+1, torch.ones_like(situ[:, 2::2]))
+        target = torch.zeros(
+            (situ.shape[0], encoder.n_nouns()+1), device=situ.device)
+        target.scatter_(1, situ[:, 2::2]+1,
+                        torch.ones_like(situ[:, 2::2]).float())
         target = target[:, 1:]
     elif predict == 'role':
-        target = torch.zeros((situ.shape[0], encoder.n_roles()+1))
-        target.scatter_(1, situ[1::2]+1, torch.ones_like(situ[:, 1::2]))
+        target = torch.zeros(
+            (situ.shape[0], encoder.n_roles()+1), device=situ.device)
+        target.scatter_(1, situ[:, 1::2]+1,
+                        torch.ones_like(situ[:, 1::2]).float())
         target = target[:, 1:]
     elif predict == 'frame':
         target = torch.tensor([
@@ -241,7 +245,7 @@ def train_batch(model, train_criteria, optimizer, input_, situ, args):
     loss = train_criteria(pred, target)
     loss.backward()
     optimizer.step()
-    return loss.detach().item()
+    return {'loss': loss.detach().item()}
 
 
 def evaluation(model, eval_criteria, eval_metric, eval_loader, args):
@@ -268,7 +272,7 @@ def evaluation(model, eval_criteria, eval_metric, eval_loader, args):
 
             metric = eval_metric(pred, target)
             for k in metric:
-                res['{}_{}'.format(args.predict, k)] += metric[k].sum()
+                res['{}_{}'.format(args.predict, k)] += metric[k].sum().item()
 
             res['total'] += batch_size
 
@@ -355,8 +359,8 @@ def main():
         eval_criteria = nn.CrossEntropyLoss(reduction='sum')
         eval_metric = correct_metric
     elif args.predict in ["noun", "role"]:
-        train_criteria = nn.BCELoss()
-        eval_criteria = nn.BCELoss(reduction='sum')
+        train_criteria = nn.BCEWithLogitsLoss()
+        eval_criteria = nn.BCEWithLogitsLoss(reduction='sum')
         eval_metric = IoU_metric
     else:
         assert False
