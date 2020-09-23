@@ -1,3 +1,4 @@
+import os
 import argparse
 import json
 import time
@@ -8,6 +9,7 @@ from torch import optim
 
 from imsitu import (imSituVerbRoleLocalNounEncoder,
                     imSituVerbRoleNounEncoder,
+                    imSituVerbFrameRoleNounEncoder,
                     imSituTensorEvaluation,
                     imSituSituation,
                     imSituSimpleImageFolder,
@@ -119,7 +121,7 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
                 maxv = max(avg_scores)
 
                 if maxv == avg_scores[-1]: 
-                    torch.save(model.state_dict(), save_dir + "/{0}.model".format(maxv))   
+                    torch.save(model.state_dict(), save_dir + "/score_{0:.5f}.model".format(maxv))   
                     print ("new best model saved! {0}".format(maxv))
 
                 top1 = imSituTensorEvaluation(1, 3, encoding)
@@ -153,6 +155,8 @@ def argparse_parser(parser=argparse.ArgumentParser()):
     return parser
 
 def main():
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
     parser = argparse_parser(argparse.ArgumentParser(description="imsitu Situation CRF. Training, evaluation, prediction and features."))
     args = parser.parse_args()
 
@@ -165,7 +169,8 @@ def main():
 
         if args.encoding_file is None: 
             # encoder = imSituVerbRoleLocalNounEncoder(train_set)
-            encoder = imSituVerbRoleNounEncoder(train_set)
+            # encoder = imSituVerbRoleNounEncoder(train_set)
+            encoder = imSituVerbFrameRoleNounEncoder(train_set)
             torch.save(encoder, args.output_dir + "/encoder")
         else:
             encoder = torch.load(args.encoding_file)

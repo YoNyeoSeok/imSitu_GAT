@@ -53,7 +53,8 @@ class baseline_attention(nn.Module):
             exit()
         self.rep_size = self.cnn.rep_size()
         
-        self.r_n = {r: torch.LongTensor(n).cuda() for r, n in self.encoding.r_n.items()}
+        self.r_n = {r: torch.tensor(n).cuda() for r, n in self.encoding.r_n.items()}
+        self.frame_v = {torch.tensor(frame).cuda(): torch.tensor(v).cuda() for frame, v in self.encoding.frame_v.items()}
 
         self.pad_v_r = np.array([
             np.pad(v_r, (0, self.encoding.mr-len(v_r)), 'constant', constant_values=(-1, -1))
@@ -69,6 +70,9 @@ class baseline_attention(nn.Module):
             self.attention = nn.ModuleList([
                 nn.modules.activation.MultiheadAttention(self.hidden[i], self.num_heads, vdim=self.hidden[i+1])
                 for i in range(len(hidden)-1)])
+            for i in range(len(hidden)-1):
+                assert hidden[i] == hidden[i+1], "additional linear layer needed for self-attention layers with linear transformation"
+            
         # self.attention = nn.ModuleList([nn.modules.activation.MultiheadAttention(self.rep_size, self.hidden[0])])
         # for i in range(len(hidden)-1):
         #     self.attention += nn.ModuleList(
@@ -83,7 +87,9 @@ class baseline_attention(nn.Module):
         # for r, n in self.encoding.r_n.items():
         #     self.linear_rn = nn.Linear(self.hidden[-1], self.encoding.n)
         # noun potentials
-        self.linear_n = nn.Linear(self.hidden[-1], self.encoding.n_nouns())
+        # self.linear_n = nn.Linear(self.hidden[-1], self.encoding.n_nouns())
+        self.linear_n = nn.ModuleList([nn.Linear(self.hidden[-1], len(self.encoding.r_n[i]))
+                                       for i in range(self.encoding.n_roles())])
 
         # print("total encoding vrn : {0}".format(encoding.n_verbrolenoun())) 
 
@@ -107,39 +113,70 @@ class baseline_attention(nn.Module):
         rep = self.cnn(image)
         v_potential = self.linear_v(rep) # bsz x n_verbs
 
+        # first node rep
         node_rep = self.linear_r(rep).view(
-            -1, self.encoding.n_roles(), self.hidden[-1]).transpose(0, 1)
-        for attention in self.attention:
-            node_rep, _ = attention(node_rep, node_rep, node_rep)
+            -1, self.encoding.n_roles(), self.hidden[0]).transpose(0, 1)  # n_roles x bsz x hidden[0]
 
-        rn_potential = self.linear_n(node_rep) # roles x bsz x n_nouns
-        # rn_potential = list(map(lambda n: rn_potential.index_select(1, n), self.r_n)) # roles x bsz x rn_nouns
-        rn_potential_grouped = list(map(
-            lambda r, n_potential: n_potential.index_select(1, self.r_n[r]),
-            *list(zip(*enumerate(rn_potential)))))
+        # per frame potential (v_potential + frame potential)
+        for i_frame, (frame, v) in enumerate(self.frame_v.items()):
+            # per frame node rep
+            frame_node_rep = node_rep[frame]
+            for att in self.attention:
+                frame_node_rep, frame_att_w = att(frame_node_rep, frame_node_rep, frame_node_rep, )
 
-        #first compute the norm
-        #step 1 compute the role marginals
-        r_maxi_grouped, r_max, rn_marginal = list(zip(*list(map(self.log_sum_exp, rn_potential_grouped)))) # roles x bsz
-        r_maxi = list(map(lambda r, r_n: r_n[r_maxi_grouped[r]], *list(zip(*self.r_n.items())))) # roles x bsz
-        r_maxi, r_max, rn_marginal = list(map(lambda x: torch.stack(x).transpose(0, 1), [r_maxi, r_max, rn_marginal])) # bsz x roles
+            # rn_potential = list(map(lambda n: rn_potential.index_select(1, n), self.r_n)) # roles x bsz x rn_nouns
+            # frame_rn_potential = self.linear_n(frame_node_rep) # len(frame) x bsz x n_nouns
+            # frame_rn_potential_grouped = list(map(
+            #     lambda r, n_potential: n_potential.index_select(1, self.r_n[r]),
+            #     frame.tolist(), frame_rn_potential))    # len(frame) x [bsz x role_n_nouns]
 
-        #concat role groups with the padding symbol 
-        zeros = torch.zeros(batch_size, 1).cuda() #this is the padding 
-        zerosi = torch.LongTensor(batch_size, 1).zero_().cuda()
-        rn_marginal = torch.cat([zeros, rn_marginal], 1) # bsz x roles+1
-        r_max = torch.cat([zeros, r_max], 1)
-        r_maxi = torch.cat([zerosi, r_maxi], 1)     
+            frame_rn_potential_grouped = [self.linear_n[r](frame_node_rep[i_r]) for i_r, r in enumerate(frame.tolist())]
+            # len(frame) x [bsz x role_n_nouns]
+            frame_rn_potential = torch.full((len(frame), batch_size, self.encoding.n_nouns()), -float("Inf")).cuda()
+            for i_r, r in enumerate(frame.tolist()):
+                frame_rn_potential[i_r, :, self.encoding.r_n[r]] = frame_rn_potential_grouped[i_r]
 
-        #step 2 compute verb marginals
-        #we need to reorganize the role potentials so it is BxVxR
-        #gather the marginals in the right way
-        vrn_marginal_grouped = torch.stack(list(map(lambda r: rn_marginal.index_select(1, r), self.pad_v_r))).transpose(0, 1)
-        vr_max_grouped = torch.stack(list(map(lambda r: r_max.index_select(1, r), self.pad_v_r))).transpose(0, 1)
-        vr_maxi_grouped = torch.stack(list(map(lambda r: r_maxi.index_select(1, r), self.pad_v_r))).transpose(0, 1)
-        # vr_marginal_grouped = r_marginal.index_select(1, v_r).view(batch_size, self.n_verbs, self.encoding.max_roles())
-        # vr_max_grouped = r_max.index_select(1, v_r).view(batch_size, self.n_verbs, self.encoding.max_roles())
-        # vr_maxi_grouped = r_maxi.index_select(1, v_r).view(batch_size, self.n_verbs, self.encoding.max_roles())
+            #first compute the norm
+            #step 1 compute the role marginals
+            frame_r_maxi, frame_r_max, frame_rn_marginal = list(zip(*list(map(self.log_sum_exp, frame_rn_potential_grouped)))) # len(frame) x bsz
+            # frame_r_maxi = list(map(lambda r, r_n: r_n[frame_r_maxi_grouped[r]], *list(zip(*enumerate([self.r_n[fr] for fr in frame.tolist()]))))) # len(frame) x bsz
+            frame_r_maxi, frame_r_max, frame_rn_marginal = list(map(lambda x: torch.stack(x).transpose(0, 1), [frame_r_maxi, frame_r_max, frame_rn_marginal])) # bsz x len(frame)
+
+            # #concat role groups with the padding symbol 
+            # zeros = torch.zeros(batch_size, 1).cuda() #this is the padding 
+            # zerosi = torch.LongTensor(batch_size, 1).zero_().cuda()
+            # rn_marginal = torch.cat([zeros, rn_marginal], 1) # bsz x len(frame)
+            # r_max = torch.cat([zeros, r_max], 1)
+            # r_maxi = torch.cat([zerosi, r_maxi], 1)
+
+            # #step 2 compute verb marginals
+            # #we need to reorganize the role potentials so it is BxVxR
+            # #gather the marginals in the right way
+            # pad_frame = F.pad(frame, pad=(0, self.encoding.mr-len(frame)), mode='constant', value=-1).cuda()+1
+            # frame_vrn_marginal_grouped = torch.stack(list(map(lambda r: rn_marginal.index_select(1, r), self.pad_v_r[v]))).transpose(0, 1)    # bsz x len(v) x max_roles
+            # frame_vr_max_grouped = torch.stack(list(map(lambda r: r_max.index_select(1, r), self.pad_v_r[v]))).transpose(0, 1)    # bsz x len(v) x max_roles
+            # frame_vr_maxi_grouped = torch.stack(list(map(lambda r: r_maxi.index_select(1, r), self.pad_v_r[v]))).transpose(0, 1)  # bsz x len(v) x max_roles
+            # # vr_marginal_grouped = r_marginal.index_select(1, v_r).view(batch_size, self.n_verbs, self.encoding.max_roles())
+            # # vr_max_grouped = r_max.index_select(1, v_r).view(batch_size, self.n_verbs, self.encoding.max_roles())
+            # # vr_maxi_grouped = r_maxi.index_select(1, v_r).view(batch_size, self.n_verbs, self.encoding.max_roles())
+
+            if i_frame == 0:
+                frn_potential = {tuple(frame.tolist()): frame_rn_potential}
+                vrn_marginal_grouped = {v_.tolist(): F.pad(frame_rn_marginal, pad=(0, self.encoding.mr-len(frame)), value=0) for v_ in v}
+                vr_max_grouped = {v_.tolist(): F.pad(frame_r_max, pad=(0, self.encoding.mr-len(frame)), value=0) for v_ in v}
+                vr_maxi_grouped = {v_.tolist(): F.pad(frame_r_maxi, pad=(0, self.encoding.mr-len(frame)), value=0) for v_ in v}
+            else:
+                assert tuple(frame.tolist()) not in frn_potential
+                frn_potential[tuple(frame.tolist())] = frame_rn_potential
+                for v_ in v:
+                    assert v_.tolist() not in vrn_marginal_grouped
+                    vrn_marginal_grouped[v_.tolist()] = F.pad(frame_rn_marginal, pad=(0, self.encoding.mr-len(frame)), value=0)
+                    vr_max_grouped[v_.tolist()] = F.pad(frame_r_max, pad=(0, self.encoding.mr-len(frame)), value=0)
+                    vr_maxi_grouped[v_.tolist()] = F.pad(frame_r_maxi, pad=(0, self.encoding.mr-len(frame)), value=0)
+        # frn_potential = torch.cat([frn_potential[tuple(fr)] for fr in self.encoding.frame_v])   # n_vr x bsz x n_nouns
+        vrn_marginal_grouped = torch.stack([vrn_marginal_grouped[v] for v in range(self.encoding.n_verbs())]).transpose(0, 1)   # bsz x n_verbs x max_roles
+        vr_max_grouped = torch.stack([vr_max_grouped[v] for v in range(self.encoding.n_verbs())]).transpose(0, 1)   # bsz x n_verbs x max_roles
+        vr_maxi_grouped = torch.stack([vr_maxi_grouped[v] for v in range(self.encoding.n_verbs())]).transpose(0, 1)   # bsz x n_verbs x max_roles
 
         # product ( sum since we are in log space )
         v_marginal = vrn_marginal_grouped.sum(2).view(batch_size, self.n_verbs) + v_potential
@@ -163,9 +200,9 @@ class baseline_attention(nn.Module):
 
         #this potentially does not work with parrelism, in which case we should figure something out 
         if self.prediction_type == "max_max":
-            rv = (rep, v_potential, rn_potential, norm, v_max, vr_maxi_grouped) 
+            rv = (rep, v_potential, frn_potential, norm, v_max, vr_maxi_grouped) 
         elif self.prediction_type == "max_marginal":
-            rv = (rep, v_potential, rn_potential, norm, v_marginal, vr_maxi_grouped) 
+            rv = (rep, v_potential, frn_potential, norm, v_marginal, vr_maxi_grouped) 
         else:
             print("unkown inference type")
             rv = ()
@@ -211,11 +248,11 @@ class baseline_attention(nn.Module):
                 else: loss = loss + pots - _norm
         return -loss/(batch_size*n_refs)
 
-    def mil_loss(self, v_potential, rn_potential, norm, situations, n_refs): 
+    def mil_loss(self, v_potential, frn_potential, norm, situations, n_refs): 
         r"""
         Args:
             v_potential: (batch_size, n_verbs)
-            rn_potential: (n_roles, batch_size, rn_nouns)
+            frn_potential: n_frame x (n_frame_role, batch_size, n_nouns)
             norm: (batch_size,)
             situations: (batch_size, 1 + n_refs*max_roles*2)
         """
@@ -225,15 +262,15 @@ class baseline_attention(nn.Module):
         for i in range(0, batch_size):
             _norm = norm[i]
             _v = v_potential[i]
-            _rn = []
             _ref = situations[i]
-            for pot in rn_potential: _rn.append(pot[i])
             for ref in range(0, n_refs):
                 v = _ref[0]
                 pots = _v[v]
-                for (pos, r) in enumerate(self.encoding.v_r[v.item()]):
+                fr = self.encoding.v_r[v.item()]
+                for (pos, r) in enumerate(fr):
                     assert _ref[1+2*mr*ref + 2*pos] == r
-                    pots = pots + _rn[r][_ref[1 + 2*mr*ref + 2*pos + 1]]
+                    assert frn_potential[tuple(fr)][pos, i][_ref[1 + 2*mr*ref + 2*pos + 1]] != torch.tensor(-float("Inf"))
+                    pots = pots + frn_potential[tuple(fr)][pos, i][_ref[1 + 2*mr*ref + 2*pos + 1]]
                 if pots.item() > _norm.item(): 
                     print("inference error")
                     print(pots)

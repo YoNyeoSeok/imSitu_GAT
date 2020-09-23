@@ -123,7 +123,9 @@ class imSituTensorEvaluation():
 
 
 class imSituVerbRoleNounEncoder:
-
+    """ ID: verb, role, noun
+        MAP: (verb, role), (role, noun)
+    """
     def n_verbs(self): return len(self.v_id)
     def n_nouns(self): return len(self.n_id)
     def n_roles(self): return len(self.r_id)
@@ -262,7 +264,9 @@ class imSituVerbRoleNounEncoder:
 
 
 class imSituVerbRoleLocalNounEncoder(imSituVerbRoleNounEncoder):
-
+    """ ID: (verb, role), ((verb, role), noun)
+        MAP: ((verb, role), verb), (verb, (verb, role))
+    """
     def n_verbrole(self): return len(self.vr_id)
     def n_verbrolenoun(self): return self.total_vrn
     def verbposition_role(self, v, i): return self.v_vr[v][i]
@@ -357,7 +361,10 @@ class imSituVerbRoleLocalNounEncoder(imSituVerbRoleNounEncoder):
         return rv
 
 
-class imSituVerbLocalRoleNounEncoder(imSituVerbRoleLocalNounEncoder):
+class imSituVerbLocalRoleNounEncoder(imSituVerbRoleNounEncoder):
+    """ ID: (role, noun), (verb, (role, noun))
+        MAP: ((role, noun), role), (role, (role, noun))
+    """
 
     def n_rolenoun(self): return len(self.rn_id)
 
@@ -365,6 +372,12 @@ class imSituVerbLocalRoleNounEncoder(imSituVerbRoleLocalNounEncoder):
         super(imSituVerbRoleLocalNounEncoder, self).__init__(dataset)
         self.rn_id = {}
         self.id_rn = {}
+
+        self.v_rn_id = {}
+        self.v_id_rn = {}
+        
+        self.r_rn = {}
+        self.rn_r = {}
 
         for (image, annotation) in dataset.items():
             v = self.v_id[annotation["verb"]]
@@ -378,6 +391,104 @@ class imSituVerbLocalRoleNounEncoder(imSituVerbRoleLocalNounEncoder):
                         _id = len(self.rn_id)
                         self.rn_id[(r, n)] = _id
                         self.id_rn[_id] = (r, n)
+
+class imSituVerbFrameRoleNounEncoder(imSituVerbRoleNounEncoder):
+    """ MAP: (frame, verb)
+    """
+    def n_frame(self): return len(self.frame_id)
+    # def n_verbrolenoun(self): return self.total_vrn
+    # def verbposition_role(self, v, i): return self.v_vr[v][i]
+    # def verb_nroles(self, v): return len(self.v_vr[v])
+
+    def __init__(self, dataset):
+        super(imSituVerbFrameRoleNounEncoder, self).__init__(dataset)
+        # self.frame_id = {}
+        # self.id_frame = {}
+
+        # self.vr_n_id = {}
+        # self.vr_id_n = {}
+
+        self.frame_v = {}
+        # self.v_frame = {}
+
+        # self.total_vrn = 0
+
+        # for (image, annotation) in dataset.items():
+        #     v = self.v_id[annotation["verb"]]
+
+        #     for frame in annotation["frames"]:
+        for (v, fr) in self.v_r.items():
+            fr = tuple(fr)
+            # r = self.r_id[r]
+            # n = self.n_id[n]
+
+            # if fr not in self.frame_id:
+            #     _id = len(self.frame_id)
+            #     self.frame_id[fr] = _id
+            #     self.id_frame[_id] = fr
+            #     self.vr_n_id[_id] = {}
+            #     self.vr_id_n[_id] = {}
+
+            # fr = self.frame_id[fr]
+            if fr not in self.frame_v:
+                self.frame_v[fr] = []
+            # self.frame_v[fr] = v
+            if v not in self.frame_v[fr]:
+                self.frame_v[fr].append(v)
+
+            # if n not in self.vr_n_id[vr]:
+            #     _id = len(self.vr_n_id[vr])
+            #     self.vr_n_id[vr][n] = _id
+            #     self.vr_id_n[vr][_id] = n
+            #     self.total_vrn += 1
+
+    # def encode(self, situation):
+    #     v = self.v_id[situation["verb"]]
+    #     rv = {"verb": v, "frames": []}
+    #     for frame in situation["frames"]:
+    #         _e = []
+    #         for (r, n) in frame.items():
+    #             if r not in self.r_id:
+    #                 r = self.unk_symbol()
+    #             else:
+    #                 r = self.r_id[r]
+    #             if n not in self.n_id:
+    #                 n = self.unk_symbol()
+    #             else:
+    #                 n = self.n_id[n]
+    #             if (v, r) not in self.vr_id:
+    #                 vr = self.unk_symbol()
+    #             else:
+    #                 vr = self.vr_id[(v, r)]
+    #             if vr not in self.vr_n_id:
+    #                 vrn = self.unk_symbol()
+    #             elif n not in self.vr_n_id[vr]:
+    #                 vrn = self.unk_symbol()
+    #             else:
+    #                 vrn = self.vr_n_id[vr][n]
+    #             _e.append((vr, vrn))
+    #         rv["frames"].append(_e)
+    #     return rv
+
+    # def decode(self, situation):
+    #     # print situation
+    #     verb = self.id_v[situation["verb"]]
+    #     rv = {"verb": verb, "frames": []}
+    #     for frame in situation["frames"]:
+    #         _fr = {}
+    #         for (vr, vrn) in frame:
+    #             vrn = vrn.item()
+    #             # print(self.vr_id_n)
+    #             if vrn not in self.vr_id_n[vr]:
+    #                 print("index error, verb = {}".format(verb))
+    #                 n = -1
+    #             else:
+    #                 n = self.id_n[self.vr_id_n[vr][vrn]]
+    #             r = self.id_r[self.id_vr[vr][1]]
+    #             _fr[r] = n
+    #         rv["frames"].append(_fr)
+    #     return rv
+
 
 
 class imSituSimpleImageFolder(data.Dataset):
