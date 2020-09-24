@@ -8,6 +8,7 @@ from collections import OrderedDict
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import torchvision as tv
 
@@ -240,37 +241,38 @@ def situ2target(situ, predict, encoder):
 def train_batch(model, train_criteria, optimizer, input_, situ, args):
     res = {}
     optimizer.zero_grad()
-    pred = model(input_)
-    target = situ2target(situ.to(pred.device), args.predict, model.encoding)
-    loss = train_criteria(pred, target)
+    logit = model(input_)
+    target = situ2target(situ.to(logit.device), args.predict, model.encoding)
+    loss = train_criteria(logit, target)
     loss.backward()
     optimizer.step()
     return {'{}_loss'.format(args.predict): loss.detach().item()}
 
 
 def evaluation(model, eval_criteria, eval_metric, eval_loader, args):
+    model.eval()
     with torch.no_grad():
         eval_loop = tqdm(eval_loader, total=len(eval_loader))
         # eval_loop = eval_loader
         columns = ["Target vid", "Target verb",
                    "Top 10 Pred vid", "Top 10 Pred verb"]
         pd_res = pd.DataFrame(columns=columns)
-        res = {"total": 0,
-               "verb_loss": .0, "verb_correct": 0,
-               "noun_loss": .0, "noun_IoU": 0,  # "noun_all_correct": 0,
-               "role_loss": .0, "role_IoU": 0,  # "role_all_correct": 0,
-               "frame_loss": .0, "frame_correct": 0}
+        res = {"total": .0,
+               "verb_loss": .0, "verb_correct": .0,
+               "noun_loss": .0, "noun_IoU": .0,  # "noun_all_correct": 0,
+               "role_loss": .0, "role_IoU": .0,  # "role_all_correct": 0,
+               "frame_loss": .0, "frame_correct": .0}
         for idx, img, situ in eval_loop:
             batch_size = img.shape[0]
             input_ = img.to(args.gpu)
-            pred = model(input_)
+            logit = model(input_)
 
-            target = situ2target(situ.to(pred.device),
+            target = situ2target(situ.to(logit.device),
                                  args.predict, model.encoding)
-            loss = eval_criteria(pred, target)
+            loss = eval_criteria(logit, target)
             res['{}_loss'.format(args.predict)] += loss.detach().item()
 
-            metric = eval_metric(pred, target)
+            metric = eval_metric(logit, target)
             for k in metric:
                 res['{}_{}'.format(args.predict, k)] += metric[k].sum().item()
 
@@ -345,14 +347,15 @@ def main():
          ],
         lr=args.learning_rate, weight_decay=args.weight_decay)
 
-    def correct_metric(pred, target):
-        correct = pred.argmax(1) == target
+    def correct_metric(logit, target):
+        pred = F.softmax(logit, dim=-1)
+        correct = (pred.argmax(1) == target).float()
         return {'correct': correct}
 
-    def IoU_metric(pred, target):
-        IoU = torch.sum((pred >= 0.5) * target.bool()) / \
-            torch.sum((pred >= 0.5) + target.bool())
-        IoU /= float(pred.shape[1])
+    def IoU_metric(logit, target):
+        pred = torch.sigmoid(logit)
+        IoU = torch.sum((pred >= 0.5) * target.bool(), dim=1).float() / \
+            torch.sum((pred >= 0.5) + target.bool(), dim=1).float()
         return {'IoU': IoU}
 
     if args.predict in ["verb", "frame"]:
@@ -374,6 +377,7 @@ def main():
         if args.use_wandb:
             wandb.log({"Eval {}".format(k): v for k, v in eval_res.items()})
 
+        model.train()
         train_loop = tqdm(train_loader, total=len(train_loader))
         # train_loop = train_loader
         for idx, img, target in train_loop:
