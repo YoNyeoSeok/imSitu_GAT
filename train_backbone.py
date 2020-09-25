@@ -8,7 +8,6 @@ from collections import OrderedDict
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 import torchvision as tv
 
@@ -16,14 +15,6 @@ from imsitu import imSituSituation
 from baseline_crf import vgg_modified as VGGModified
 from utils import vgg_bn_modified as VGGBNModified
 import wandb
-# , predict_n_loss="mil"
-#         self.predict_n_loss = predict_n_loss
-#             if predict_n_loss == "mil":
-#                 self.loss = self.mil_loss
-#             elif predict_n_loss == "sum":
-#                 self.loss = self.sum_loss
-#             else:
-#                 assert False, "Wrong predict_n_loss"
 
 
 class imSituVerbRoleNounUNKEncoder:
@@ -239,14 +230,36 @@ def situ2target(situ, predict, encoder):
 
 
 def train_batch(model, train_criteria, optimizer, input_, situ, args):
-    res = {}
+    model.train()
+
     optimizer.zero_grad()
-    logit = model(input_)
-    target = situ2target(situ.to(logit.device), args.predict, model.encoding)
-    loss = train_criteria(logit, target)
+    pred = model(input_)
+    target = situ2target(situ.to(pred.device), args.predict, model.encoding)
+    loss = train_criteria(pred, target)
     loss.backward()
     optimizer.step()
+
     return {'{}_loss'.format(args.predict): loss.detach().item()}
+
+
+def eval_batch(model, eval_criteria, eval_metric, input_, situ, args):
+    res = {}
+    model.eval()
+    with torch.no_grad():
+        res['batch_size'] = int(input_.shape[0])
+        pred = model(input_)
+
+        target = situ2target(situ.to(pred.device),
+                             args.predict, model.encoding)
+        loss = eval_criteria(pred, target)
+        res['{}_loss'.format(args.predict)] = loss.detach().item()
+
+        metric = eval_metric(pred, target)
+        for k in metric:
+            res['{}_{}'.format(args.predict, k)] = \
+                metric[k].sum().item()
+
+    return res
 
 
 def evaluation(model, eval_criteria, eval_metric, eval_loader, args):
@@ -257,22 +270,22 @@ def evaluation(model, eval_criteria, eval_metric, eval_loader, args):
         columns = ["Target vid", "Target verb",
                    "Top 10 Pred vid", "Top 10 Pred verb"]
         pd_res = pd.DataFrame(columns=columns)
-        res = {"total": .0,
-               "verb_loss": .0, "verb_correct": .0,
-               "noun_loss": .0, "noun_IoU": .0,  # "noun_all_correct": 0,
-               "role_loss": .0, "role_IoU": .0,  # "role_all_correct": 0,
-               "frame_loss": .0, "frame_correct": .0}
+        res = {"total": 0,
+               "verb_loss": 0., "verb_correct": 0,
+               "noun_loss": 0., "noun_IoU": 0,  # "noun_all_correct": 0,
+               "role_loss": 0., "role_IoU": 0,  # "role_all_correct": 0,
+               "frame_loss": 0., "frame_correct": 0}
         for idx, img, situ in eval_loop:
             batch_size = img.shape[0]
             input_ = img.to(args.gpu)
-            logit = model(input_)
+            pred = model(input_)
 
-            target = situ2target(situ.to(logit.device),
+            target = situ2target(situ.to(pred.device),
                                  args.predict, model.encoding)
-            loss = eval_criteria(logit, target)
+            loss = eval_criteria(pred, target)
             res['{}_loss'.format(args.predict)] += loss.detach().item()
 
-            metric = eval_metric(logit, target)
+            metric = eval_metric(pred, target)
             for k in metric:
                 res['{}_{}'.format(args.predict, k)] += metric[k].sum().item()
 
@@ -302,20 +315,24 @@ def main():
     args = parser.parse_args()
     print(args)
 
+    if args.use_wandb:
+        wandb.init(project='imSitu_YYS2', name=args.predict, config=args)
+
     train_set = json.load(open(args.dataset_dir+"/train.json"))
     dev_set = json.load(open(args.dataset_dir+"/dev.json"))
 
     if args.encoding_file is None:
         encoder = imSituVerbRoleNounUNKEncoder(
             train_set, args.predict_top_k_noun)
-        if not os.path.exists(args.output_dir):
-            os.makedirs(args.output_dir)
-        torch.save(encoder, args.output_dir + "/encoder")
+        if args.use_wandb:
+            torch.save(encoder, wandb.run.dir + "/encoder")
+        else:
+            if not os.path.exists(args.output_dir):
+                os.makedirs(args.output_dir)
+            torch.save(encoder, args.output_dir + "/encoder")
     else:
         encoder = torch.load(args.encoding_file)
 
-    if args.use_wandb:
-        wandb.init(project='imSitu_YYS', name=args.predict, config=args)
     if args.predict == 'verb':
         num_class = encoder.n_verbs()
     elif args.predict == 'noun':
@@ -347,15 +364,14 @@ def main():
          ],
         lr=args.learning_rate, weight_decay=args.weight_decay)
 
-    def correct_metric(logit, target):
-        pred = F.softmax(logit, dim=-1)
-        correct = (pred.argmax(1) == target).float()
+    def correct_metric(pred, target):
+        correct = pred.argmax(1) == target
         return {'correct': correct}
 
-    def IoU_metric(logit, target):
-        pred = torch.sigmoid(logit)
-        IoU = torch.sum((pred >= 0.5) * target.bool(), dim=1).float() / \
-            torch.sum((pred >= 0.5) + target.bool(), dim=1).float()
+    def IoU_metric(pred, target):
+        IoU = torch.sum((pred >= 0.5) * target.bool()) / \
+            torch.sum((pred >= 0.5) + target.bool())
+        IoU /= float(pred.shape[1])
         return {'IoU': IoU}
 
     if args.predict in ["verb", "frame"]:
@@ -375,30 +391,48 @@ def main():
         print({k: '{:.4f}'.format(v)
                for k, v in eval_res.items() if k != 'total'})
         if args.use_wandb:
-            wandb.log({"Eval {}".format(k): v for k, v in eval_res.items()})
+            wandb.log({"Eval {}".format(k): v for k, v in eval_res.items()},
+                      step=epoch*len(train_loader))
 
-        model.train()
-        train_loop = tqdm(train_loader, total=len(train_loader))
+        train_loop = tqdm(enumerate(train_loader), total=len(train_loader))
         # train_loop = train_loader
-        for idx, img, target in train_loop:
+        running_eval_res = {'total': 0}
+        for batch_idx, (idx, img, situ) in train_loop:
             train_res = train_batch(
                 model, train_criteria, optimizer,
-                img.to(args.gpu), target.to(args.gpu), args)
+                img.to(args.gpu), situ.to(args.gpu), args)
+            eval_res = eval_batch(
+                model, eval_criteria, eval_metric,
+                img.to(args.gpu), situ.to(args.gpu), args)
+
+            running_eval_res['total'] += eval_res['batch_size']
+            for k, v in eval_res.items():
+                if 'batch_size' != k:
+                    if k not in running_eval_res:
+                        running_eval_res[k] = [0.]*len(train_loader)
+                    running_eval_res[k][batch_idx] = v
             if args.use_wandb:
                 wandb.log({"Train {}".format(k): v
-                           for k, v in train_res.items()})
+                           for k, v in train_res.items()},
+                          step=epoch*len(train_loader)+batch_idx)
+                wandb.log({"Train {}".format(k): sum(v) / min(running_eval_res['total'], len(train_loader.dataset))
+                           for k, v in running_eval_res.items() if 'total' != k},
+                          step=epoch*len(train_loader)+batch_idx)
 
-        torch.save(model.state_dict(),
-                   "{}/Epoch{:02d}".format(args.output_dir, epoch))
         if args.use_wandb:
             torch.save(model.state_dict(),
                        "{}/Epoch{:02d}".format(wandb.run.dir, epoch))
+        else:
+            torch.save(model.state_dict(),
+                       "{}/Epoch{:02d}".format(args.output_dir, epoch))
+
         # break
 
     eval_res = evaluation(model, eval_criteria, eval_metric, dev_loader, args)
     print({k: '{:.4f}'.format(v) for k, v in eval_res.items() if k != 'total'})
     if args.use_wandb:
-        wandb.log({"Eval {}".format(k): v for k, v in eval_res.items()})
+        wandb.log({"Eval {}".format(k): v for k, v in eval_res.items()},
+                  step=args.num_epoch*len(train_loader))
 
 
 if __name__ == "__main__":
