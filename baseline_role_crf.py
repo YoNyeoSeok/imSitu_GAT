@@ -135,13 +135,13 @@ class ResNetModifiedSmall(nn.Module):
         return self.dropout(self.relu(self.linear(x.view(-1, 7*7*self.base_size()))))
 
 
-class BaselineCRF(nn.Module):
+class BaselineRoleCrf(nn.Module):
     def train_preprocess(self): return self.train_transform
     def dev_preprocess(self): return self.dev_transform
 
     # these seem like decent splits of imsitu, freq = 0,50,100,282 , prediction type can be "max_max" or "max_marginal"
-    def __init__(self, encoding, splits=[50, 100, 283], prediction_type="max_max", device_array=[0], cnn_type="resnet_101"):
-        super(BaselineCRF, self).__init__()
+    def __init__(self, encoding, prediction_type="max_max", device_array=[0], cnn_type="resnet_101"):
+        super(BaselineRoleCrf, self).__init__()
 
         self.normalize = tv.transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -161,8 +161,6 @@ class BaselineCRF(nn.Module):
         ])
 
         self.broadcast = []
-        self.nsplits = len(splits)
-        self.splits = splits
         self.encoding = encoding
         self.prediction_type = prediction_type
         self.n_verbs = encoding.n_verbs()
@@ -513,8 +511,10 @@ def eval_model(dataset_loader, encoding, model, eval_gpu):
     mx = len(dataset_loader)
     for i, (index, input, target) in enumerate(dataset_loader):
         print("{}/{} batches\r".format(i+1, mx)),
-        input_var = torch.autograd.Variable(input.cuda(eval_gpu), volatile=True)
-        target_var = torch.autograd.Variable(target.cuda(eval_gpu), volatile=True)
+        input_var = torch.autograd.Variable(
+            input.cuda(eval_gpu), volatile=True)
+        target_var = torch.autograd.Variable(
+            target.cuda(eval_gpu), volatile=True)
         (scores, predictions) = model.forward_max(input_var)
         (s_sorted, idx) = torch.sort(scores, 1, True)
         top1.add_point(target, predictions.data, idx.data)
@@ -526,7 +526,7 @@ def eval_model(dataset_loader, encoding, model, eval_gpu):
 
 def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, encoding, optimizer, save_dir, device_array, args, timing=False):
     if args.use_wandb:
-        wandb.init(project='imSitu_YYS3', name='CRF', config=args)
+        wandb.init(project='imSitu_YYS3', name='Role_CRF', config=args)
     model.train()
 
     time_all = time.time()
@@ -591,7 +591,8 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
             if total_steps % eval_frequency == 0:
                 print("eval...")
                 etime = time.time()
-                (top1, top5) = eval_model(dev_loader, encoding, model, device_array[0])
+                (top1, top5) = eval_model(
+                    dev_loader, encoding, model, device_array[0])
                 model.train()
                 print("... done after {:.2f} s".format(time.time() - etime))
                 top1_a = top1.get_average_results()
@@ -673,8 +674,8 @@ def main():
         else:
             encoder = torch.load(args.encoding_file)
 
-        model = BaselineCRF(encoder, cnn_type=args.cnn_type,
-                            device_array=args.device_array)
+        model = BaselineRoleCrf(encoder, cnn_type=args.cnn_type,
+                                device_array=args.device_array)
 
         if args.weights_file is not None:
             model.load_state_dict(torch.load(args.weights_file))
@@ -707,7 +708,7 @@ def main():
         else:
             encoder = torch.load(args.encoding_file)
         print("creating model...")
-        model = BaselineCRF(encoder, cnn_type=args.cnn_type)
+        model = BaselineRoleCrf(encoder, cnn_type=args.cnn_type)
 
         if args.weights_file is None:
             print("expecting weight file to run features")
@@ -743,7 +744,7 @@ def main():
             encoder = torch.load(args.encoding_file)
 
         print("creating model...")
-        model = BaselineCRF(encoder, cnn_type=args.cnn_type)
+        model = BaselineRoleCrf(encoder, cnn_type=args.cnn_type)
 
         if args.weights_file is None:
             print("expecting weight file to run features")
@@ -769,7 +770,7 @@ def main():
             encoder = torch.load(args.encoding_file)
 
         print("creating model...")
-        model = BaselineCRF(encoder, cnn_type=args.cnn_type)
+        model = BaselineRoleCrf(encoder, cnn_type=args.cnn_type)
 
         if args.weights_file is None:
             print("expecting weight file to run features")
