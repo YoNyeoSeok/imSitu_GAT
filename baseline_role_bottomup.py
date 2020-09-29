@@ -310,8 +310,8 @@ class BaselineRoleBottomUp(nn.Module):
             rv = (rep, v_potential, rn_potential,
                   norm, _max, r_maxi_grouped)
         elif self.prediction_type == "max_marginal":
-            rv = (rep, rn_marginal, rn_potential,
-                  norm, v_potential, r_maxi_grouped)
+            rv = (rep, v_potential, rn_potential,
+                  norm, marginal, r_maxi_grouped)
         else:
             print("unkown inference type")
             rv = ()
@@ -571,8 +571,6 @@ def main():
                         help="a file corresponding to the encoder")
     parser.add_argument("--cnn_type", choices=["resnet_34", "resnet_50", "resnet_101"],
                         default="resnet_101", help="the cnn to initilize")
-    parser.add_argument("--node_hidden_layer", type=int, nargs='*',
-                        default=[32], help="the role node hidden layer sizes")
     parser.add_argument("--batch_size", default=64,
                         help="batch size for training", type=int)
     parser.add_argument("--learning_rate", default=1e-5,
@@ -603,7 +601,7 @@ def main():
         else:
             encoder = torch.load(args.encoding_file)
 
-        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type, node_hidden_layer=args.node_hidden_layer,
+        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type,
                                      device_array=args.device_array)
 
         if args.weights_file is not None:
