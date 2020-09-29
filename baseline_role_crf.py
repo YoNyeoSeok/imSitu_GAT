@@ -147,10 +147,10 @@ class BaselineRoleCrf(nn.Module):
         self.normalize = tv.transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.train_transform = tv.transforms.Compose([
-            # tv.transforms.Scale(224),
-            # tv.transforms.RandomCrop(224),
-            tv.transforms.RandomRotation(10),
-            tv.transforms.RandomResizedCrop(224),
+            tv.transforms.Resize(224),
+            tv.transforms.RandomCrop(224),
+            # tv.transforms.RandomRotation(10),
+            # tv.transforms.RandomResizedCrop(224),
             tv.transforms.RandomHorizontalFlip(),
             tv.transforms.ToTensor(),
             self.normalize,
@@ -221,10 +221,6 @@ class BaselineRoleCrf(nn.Module):
         initLinear(self.linear_v)
         for _l in self.linear_rn:
             initLinear(_l)
-
-    def forward_max(self, images):
-        (_, _, _, _, scores, values) = self.forward(images)
-        return (scores, values)
 
     def forward_features(self, images):
         return self.cnn(images)
@@ -365,7 +361,7 @@ def predict_human_readable(dataset_loader, simple_dataset, encoder, model, outdi
     for i, (input, index) in enumerate(dataset_loader):
         print("{}/{} batches".format(i+1, mx))
         input_var = torch.autograd.Variable(input.cuda(), volatile=True)
-        (scores, predictions) = model.forward_max(input_var)
+        _, _, _, _, scores, predictions = model.forward(input_var)
         # (s_sorted, idx) = torch.sort(scores, 1, True)
         human = encoder.to_situation(predictions)
         (b, p, d) = predictions.size()
@@ -399,8 +395,7 @@ def compute_features(dataset_loader, simple_dataset,  model, outdir):
     print("\ndone.")
 
 
-def eval_model(dataset_loader, encoding, model, eval_gpu):
-    model.cuda(eval_gpu)
+def eval_model(dataset_loader, encoding, model):
     model.eval()
     print("evaluating model...")
     top1 = imSituTensorEvaluation(1, 3, encoding)
@@ -410,10 +405,10 @@ def eval_model(dataset_loader, encoding, model, eval_gpu):
     for i, (index, input, target) in enumerate(dataset_loader):
         print("{}/{} batches\r".format(i+1, mx)),
         input_var = torch.autograd.Variable(
-            input.cuda(eval_gpu), volatile=True)
+            input, volatile=True)
         target_var = torch.autograd.Variable(
-            target.cuda(eval_gpu), volatile=True)
-        (scores, predictions) = model.forward_max(input_var)
+            target, volatile=True)
+        _, _, _, _, scores, predictions = model.forward(input_var)
         (s_sorted, idx) = torch.sort(scores, 1, True)
         top1.add_point(target, predictions.data, idx.data)
         top5.add_point(target, predictions.data, idx.data)
@@ -490,7 +485,7 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
                 print("eval...")
                 etime = time.time()
                 (top1, top5) = eval_model(
-                    dev_loader, encoding, model, device_array[0])
+                    dev_loader, encoding, pmodel)
                 model.train()
                 print("... done after {:.2f} s".format(time.time() - etime))
                 top1_a = top1.get_average_results()
