@@ -128,6 +128,8 @@ class imSituVerbRoleNounEncoder:
     def n_roles(self): return len(self.r_id)
     def verbposition_role(self, v, i): return self.v_r[v][i]
     def verb_nroles(self, v): return len(self.v_r[v])
+    def roleposition_verb(self, r, i): return self.r_v[r][i]
+    def role_nverbs(self, r): return len(self.r_v[r])
     def max_roles(self): return self.mr
     def pad_symbol(self): return -1
     def unk_symbol(self): return -2
@@ -145,6 +147,7 @@ class imSituVerbRoleNounEncoder:
         self.mr = 0
 
         self.v_r = {}
+        self.r_v = {}
 
         for (image, annotation) in dataset.items():
             v = annotation["verb"]
@@ -160,6 +163,7 @@ class imSituVerbRoleNounEncoder:
                         _id = len(self.r_id)
                         self.r_id[r] = _id
                         self.id_r[_id] = r
+                        self.r_v[_id] = [vid]
 
                     if n not in self.n_id:
                         _id = len(self.n_id)
@@ -169,6 +173,8 @@ class imSituVerbRoleNounEncoder:
                     rid = self.r_id[r]
                     if rid not in self.v_r[vid]:
                         self.v_r[vid].append(rid)
+                    if vid not in self.r_v[rid]:
+                        self.r_v[rid].append(vid)
 
         for (v, rs) in self.v_r.items():
             if len(rs) > self.mr:
@@ -176,6 +182,8 @@ class imSituVerbRoleNounEncoder:
 
         for (v, vid) in self.v_id.items():
             self.v_r[vid] = sorted(self.v_r[vid])
+        for (r, rid) in self.r_id.items():
+            self.r_v[rid] = sorted(self.r_v[rid])
 
     def encode(self, situation):
         rv = {}

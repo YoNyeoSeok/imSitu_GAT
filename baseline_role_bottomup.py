@@ -140,7 +140,7 @@ class BaselineRoleBottomUp(nn.Module):
     def dev_preprocess(self): return self.dev_transform
 
     # prediction type can be "max_max" or "max_marginal"
-    def __init__(self, encoding,
+    def __init__(self, encoding, node_size,
                  prediction_type="max_max", device_array=[0], cnn_type="resnet_101"):
         super(BaselineRoleBottomUp, self).__init__()
 
@@ -205,20 +205,32 @@ class BaselineRoleBottomUp(nn.Module):
             self.broadcast.append(
                 Variable(torch.LongTensor(self.v_r).cuda(g)))
 
+        self.role_node = nn.ModuleList([
+            nn.Linear(self.rep_size, node_size)
+            for r in range(self.encoding.n_roles())])
+
         # verb potential
-        self.linear_v = nn.Linear(self.rep_size, self.encoding.n_verbs())
-        # verb-role-noun potentials
+        self.linear_rv = nn.ModuleList([
+            nn.Linear(node_size, len(rv))
+            for r, rv in self.encoding.r_v.items()])
+        self.total_rv = 0
+        for r, rv in self.encoding.r_v.items():
+            self.total_rv += len(rv)
+
+        # role-noun potentials
         self.linear_rn = nn.ModuleList([
-            nn.Linear(self.rep_size, len(rn))
+            nn.Linear(node_size, len(rn))
             for r, rn in self.encoding.r_id_n.items()])
         self.total_rn = 0
         for r, rn in self.encoding.r_id_n.items():
             self.total_rn += len(rn)
-        print("total encoding rn : {0}".format(
-            encoding.n_rolenoun()))
+
+        print("total rv: {0}, total rn : {1}, encoding rn : {2}".format(
+            self.total_rv, self.total_rn, encoding.n_rolenoun()))
 
         # initilize everything
-        initLinear(self.linear_v)
+        for _l in self.linear_rv:
+            initLinear(_l)
         for _l in self.linear_rn:
             initLinear(_l)
 
@@ -229,22 +241,37 @@ class BaselineRoleBottomUp(nn.Module):
         batch_size = image.size()[0]
 
         rep = self.cnn(image)
-        v_potential = self.linear_v(rep)
+        role_rep = self.role_node(rep)
 
         rn_potential = []
         rn_marginal = []
-        r_max = []
-        r_maxi = []
+        n_max = []
+        n_maxi = []
         for i, rn_group in enumerate(self.linear_rn):
-            _rn_potential = rn_group(rep)
+            _rn_potential = rn_group(role_rep)
             rn_potential.append(_rn_potential)
 
             _rn_marginal = _rn_potential.logsumexp(1, keepdim=True)
             rn_marginal.append(_rn_marginal)
 
-            _r_max, _r_maxi = _rn_potential.max(1, keepdim=True)
-            r_maxi.append(_r_maxi)
-            r_max.append(_r_max)
+            _n_max, _n_maxi = _rn_potential.max(1, keepdim=True)
+            n_maxi.append(_n_maxi)
+            n_max.append(_n_max)
+
+        rv_potential = []
+        rv_marginal = []
+        v_max = []
+        v_maxi = []
+        for i, rv_group in enumerate(self.linear_rv):
+            _rv_potential = rv_group(role_rep)
+            rv_potential.append(_rv_potential)
+
+            _rv_marginal = _rv_potential.logsumexp(1, keepdim=True)
+            rv_marginal.append(_rv_marginal)
+
+            _v_max, _v_maxi = _rv_potential.max(1, keepdim=True)
+            v_maxi.append(_v_maxi)
+            v_max.append(_v_max)
 
         # concat role groups with the padding symbol
         zeros = Variable(torch.zeros(batch_size, 1))  # this is the padding
