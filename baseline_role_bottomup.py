@@ -135,14 +135,14 @@ class ResNetModifiedSmall(nn.Module):
         return self.dropout(self.relu(self.linear(x.view(-1, 7*7*self.base_size()))))
 
 
-class BaselineRoleCrf(nn.Module):
+class BaselineRoleBottomUp(nn.Module):
     def train_preprocess(self): return self.train_transform
     def dev_preprocess(self): return self.dev_transform
 
     # prediction type can be "max_max" or "max_marginal"
     def __init__(self, encoding,
                  prediction_type="max_max", device_array=[0], cnn_type="resnet_101"):
-        super(BaselineRoleCrf, self).__init__()
+        super(BaselineRoleBottomUp, self).__init__()
 
         self.normalize = tv.transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -278,7 +278,7 @@ class BaselineRoleCrf(nn.Module):
                   norm, _max, r_maxi_grouped)
         elif self.prediction_type == "max_marginal":
             rv = (rep, v_potential, rn_potential,
-                  norm, _marginal, r_maxi_grouped)
+                  norm, marginal, r_maxi_grouped)
         else:
             print("unkown inference type")
             rv = ()
@@ -420,7 +420,7 @@ def eval_model(dataset_loader, encoding, model, device):
 
 def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, encoding, optimizer, save_dir, device_array, args, timing=False):
     if args.use_wandb:
-        wandb.init(project='imSitu_YYS3', name='Role_CRF', config=args)
+        wandb.init(project='imSitu_YYS3', name='Role_BottomUp', config=args)
     model.train()
 
     time_all = time.time()
@@ -524,8 +524,7 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(
-        description="imsitu Situation CRF. Training, evaluation, prediction and features.")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--command",
                         choices=["train", "eval", "predict", "features"], required=True)
     parser.add_argument("--output_dir",
@@ -538,7 +537,7 @@ def main():
     parser.add_argument("--encoding_file",
                         help="a file corresponding to the encoder")
     parser.add_argument("--cnn_type", choices=["resnet_34", "resnet_50", "resnet_101"],
-                        default="resnet_101", help="the cnn to initilize the crf with")
+                        default="resnet_101", help="the cnn to initilize")
     parser.add_argument("--batch_size", default=64,
                         help="batch size for training", type=int)
     parser.add_argument("--learning_rate", default=1e-5,
@@ -569,8 +568,8 @@ def main():
         else:
             encoder = torch.load(args.encoding_file)
 
-        model = BaselineRoleCrf(encoder, cnn_type=args.cnn_type,
-                                device_array=args.device_array)
+        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type,
+                                     device_array=args.device_array)
 
         if args.weights_file is not None:
             model.load_state_dict(torch.load(args.weights_file))
@@ -603,7 +602,7 @@ def main():
         else:
             encoder = torch.load(args.encoding_file)
         print("creating model...")
-        model = BaselineRoleCrf(encoder, cnn_type=args.cnn_type)
+        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type)
 
         if args.weights_file is None:
             print("expecting weight file to run features")
@@ -639,7 +638,7 @@ def main():
             encoder = torch.load(args.encoding_file)
 
         print("creating model...")
-        model = BaselineRoleCrf(encoder, cnn_type=args.cnn_type)
+        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type)
 
         if args.weights_file is None:
             print("expecting weight file to run features")
@@ -665,7 +664,7 @@ def main():
             encoder = torch.load(args.encoding_file)
 
         print("creating model...")
-        model = BaselineRoleCrf(encoder, cnn_type=args.cnn_type)
+        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type)
 
         if args.weights_file is None:
             print("expecting weight file to run features")
