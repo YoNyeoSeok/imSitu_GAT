@@ -185,12 +185,6 @@ class BaselineRoleCrf(nn.Module):
 
         # need a list that is nverbs by 6
         self.v_r = [0 for i in range(0, self.encoding.n_verbs()*max_roles)]
-        splits_offset = []
-        for i, (r, rn) in enumerate(self.encoding.r_id_n.items()):
-            if i == 0:
-                splits_offset.append(0)
-            else:
-                splits_offset.append(splits_offset[-1] + len(rn))
 
         # and we need to compute the position of the corresponding roles, and pad with the 0 symbol
         for v in self.encoding.id_v:
@@ -200,7 +194,7 @@ class BaselineRoleCrf(nn.Module):
             k = 0
             for r in roles:
                 # add one to account of the 0th element being the padding
-                self.v_r[offset + k] = splits_offset[r] + 1
+                self.v_r[offset + k] = r + 1
                 k += 1
             # pad
             while k < max_roles:
