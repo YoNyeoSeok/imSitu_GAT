@@ -140,7 +140,7 @@ class BaselineRoleBottomUp(nn.Module):
     def dev_preprocess(self): return self.dev_transform
 
     # prediction type can be "max_max" or "max_marginal"
-    def __init__(self, encoding, node_size,
+    def __init__(self, encoding, node_hidden_layer,
                  prediction_type="max_max", device_array=[0], cnn_type="resnet_101"):
         super(BaselineRoleBottomUp, self).__init__()
 
@@ -165,6 +165,7 @@ class BaselineRoleBottomUp(nn.Module):
 
         self.broadcast = []
         self.encoding = encoding
+        self.node_hidden_layer = node_hidden_layer
         self.prediction_type = prediction_type
         self.n_verbs = encoding.n_verbs()
         # cnn
@@ -205,8 +206,16 @@ class BaselineRoleBottomUp(nn.Module):
             self.broadcast.append(
                 Variable(torch.LongTensor(self.v_r).cuda(g)))
 
+        hidden_layer = [nn.Identity()] if len(
+            self.node_hidden_layer) == 0 else []
+        node_size = self.rep_size
+        for node_size_ in self.node_hidden_layer:
+            hidden_layer += [nn.Linear(node_size, node_size_),
+                             nn.ReLU(), nn.Dropout(.5)]
+            node_size = node_size_
+
         self.role_node = nn.ModuleList([
-            nn.Linear(self.rep_size, node_size)
+            nn.Sequential(*hidden_layer)
             for r in range(self.encoding.n_roles())])
 
         # verb potential
@@ -241,37 +250,23 @@ class BaselineRoleBottomUp(nn.Module):
         batch_size = image.size()[0]
 
         rep = self.cnn(image)
-        role_rep = self.role_node(rep)
+        role_rep = [role_node(rep)
+                    for role_node in self.role_node]
 
         rn_potential = []
         rn_marginal = []
-        n_max = []
-        n_maxi = []
+        r_max = []
+        r_maxi = []
         for i, rn_group in enumerate(self.linear_rn):
-            _rn_potential = rn_group(role_rep)
+            _rn_potential = rn_group(role_rep[i])
             rn_potential.append(_rn_potential)
 
             _rn_marginal = _rn_potential.logsumexp(1, keepdim=True)
             rn_marginal.append(_rn_marginal)
 
-            _n_max, _n_maxi = _rn_potential.max(1, keepdim=True)
-            n_maxi.append(_n_maxi)
-            n_max.append(_n_max)
-
-        rv_potential = []
-        rv_marginal = []
-        v_max = []
-        v_maxi = []
-        for i, rv_group in enumerate(self.linear_rv):
-            _rv_potential = rv_group(role_rep)
-            rv_potential.append(_rv_potential)
-
-            _rv_marginal = _rv_potential.logsumexp(1, keepdim=True)
-            rv_marginal.append(_rv_marginal)
-
-            _v_max, _v_maxi = _rv_potential.max(1, keepdim=True)
-            v_maxi.append(_v_maxi)
-            v_max.append(_v_max)
+            _r_max, _r_maxi = _rn_potential.max(1, keepdim=True)
+            r_maxi.append(_r_maxi)
+            r_max.append(_r_max)
 
         # concat role groups with the padding symbol
         zeros = Variable(torch.zeros(batch_size, 1))  # this is the padding
@@ -292,6 +287,16 @@ class BaselineRoleBottomUp(nn.Module):
         r_maxi_grouped = r_maxi.index_select(1, v_r).view(
             batch_size, self.n_verbs, self.encoding.max_roles())
 
+        rv_potential = torch.full((batch_size, self.encoding.n_roles(), self.n_verbs), float('-inf')
+                                  ).to(rn_marginal.device)
+        for i, rv_group in enumerate(self.linear_rv):
+            _rv_potential = rv_group(role_rep[i])
+            v_idx = torch.LongTensor(
+                self.encoding.r_v[i]).to(_rv_potential.device)
+            rv_potential[:, i].scatter_(
+                -1, v_idx[None, :].repeat(batch_size, 1), _rv_potential)
+        v_potential = rv_potential.logsumexp(dim=1)
+
         marginal = rn_marginal_grouped.sum(2).view(
             batch_size, self.n_verbs) + v_potential
 
@@ -304,8 +309,8 @@ class BaselineRoleBottomUp(nn.Module):
             rv = (rep, v_potential, rn_potential,
                   norm, _max, r_maxi_grouped)
         elif self.prediction_type == "max_marginal":
-            rv = (rep, v_potential, rn_potential,
-                  norm, marginal, r_maxi_grouped)
+            rv = (rep, rn_marginal, rn_potential,
+                  norm, v_potential, r_maxi_grouped)
         else:
             print("unkown inference type")
             rv = ()
@@ -565,6 +570,8 @@ def main():
                         help="a file corresponding to the encoder")
     parser.add_argument("--cnn_type", choices=["resnet_34", "resnet_50", "resnet_101"],
                         default="resnet_101", help="the cnn to initilize")
+    parser.add_argument("--node_hidden_layer", type=int, nargs='*',
+                        default=[32], help="the role node hidden layer sizes")
     parser.add_argument("--batch_size", default=64,
                         help="batch size for training", type=int)
     parser.add_argument("--learning_rate", default=1e-5,
@@ -595,7 +602,7 @@ def main():
         else:
             encoder = torch.load(args.encoding_file)
 
-        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type,
+        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type, node_hidden_layer=args.node_hidden_layer,
                                      device_array=args.device_array)
 
         if args.weights_file is not None:
