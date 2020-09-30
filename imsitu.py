@@ -430,12 +430,13 @@ class imSituVerbLocalRoleNounEncoder(imSituVerbRoleNounEncoder):
 class imSituVerbFrameRoleNounEncoder:
 
     def n_verbs(self): return len(self.v_id)
-    def n_nouns(self): return len(self.n_id)
+    def n_frames(self): return len(self.f_id)
     def n_roles(self): return len(self.r_id)
-    def verbposition_role(self, v, i): return self.v_r[v][i]
-    def verb_nroles(self, v): return len(self.v_r[v])
-    def roleposition_verb(self, r, i): return self.r_v[r][i]
-    def role_nverbs(self, r): return len(self.r_v[r])
+    def n_nouns(self): return len(self.n_id)
+    def frameposition_role(self, f, i): return self.f_r[f][i]
+    def frame_nroles(self, f): return len(self.f_r[f])
+    def roleposition_frame(self, r, i): return self.r_f[r][i]
+    def role_nframes(self, r): return len(self.r_f[r])
     def max_roles(self): return self.mr
     def pad_symbol(self): return -1
     def unk_symbol(self): return -2
@@ -443,6 +444,9 @@ class imSituVerbFrameRoleNounEncoder:
     def __init__(self, dataset):
         self.v_id = {}
         self.id_v = {}
+
+        self.f_id = {}
+        self.id_f = {}
 
         self.r_id = {}
         self.id_r = {}
@@ -452,8 +456,11 @@ class imSituVerbFrameRoleNounEncoder:
 
         self.mr = 0
 
-        self.v_r = {}
-        self.r_v = {}
+        self.v_f = {}
+        self.f_v = {}
+
+        self.r_f = {}
+        self.f_r = {}
 
         for (image, annotation) in dataset.items():
             v = annotation["verb"]
@@ -461,15 +468,24 @@ class imSituVerbFrameRoleNounEncoder:
                 _id = len(self.v_id)
                 self.v_id[v] = _id
                 self.id_v[_id] = v
-                self.v_r[_id] = []
+                self.v_f[_id] = []
             vid = self.v_id[v]
             for frame in annotation["frames"]:
+                f = frozenset([r for r in frame])
+                if f not in self.f_id:
+                    _id = len(self.f_id)
+                    self.f_id[f] = _id
+                    self.id_f[_id] = f
+                    self.f_v[_id] = [vid]
+                    self.f_r[_id] = []
+                fid = self.f_id[f]
+
                 for (r, n) in frame.items():
                     if r not in self.r_id:
                         _id = len(self.r_id)
                         self.r_id[r] = _id
                         self.id_r[_id] = r
-                        self.r_v[_id] = [vid]
+                        self.r_f[_id] = [fid]
 
                     if n not in self.n_id:
                         _id = len(self.n_id)
@@ -477,19 +493,27 @@ class imSituVerbFrameRoleNounEncoder:
                         self.id_n[_id] = n
 
                     rid = self.r_id[r]
-                    if rid not in self.v_r[vid]:
-                        self.v_r[vid].append(rid)
-                    if vid not in self.r_v[rid]:
-                        self.r_v[rid].append(vid)
+                    if fid not in self.v_f[vid]:
+                        self.v_f[vid].append(fid)
+                    if fid not in self.r_f[rid]:
+                        self.r_f[rid].append(fid)
+                    if vid not in self.f_v[fid]:
+                        self.f_v[fid].append(vid)
+                    if rid not in self.f_r[fid]:
+                        self.f_r[fid].append(rid)
 
-        for (v, rs) in self.v_r.items():
+        for (f, rs) in self.f_r.items():
             if len(rs) > self.mr:
                 self.mr = len(rs)
 
-        for (v, vid) in self.v_id.items():
-            self.v_r[vid] = sorted(self.v_r[vid])
+        for (f, fid) in self.f_id.items():
+            self.f_r[fid] = sorted(self.f_r[fid])
+        for (f, fid) in self.f_id.items():
+            self.f_v[fid] = sorted(self.f_v[fid])
         for (r, rid) in self.r_id.items():
-            self.r_v[rid] = sorted(self.r_v[rid])
+            self.r_f[rid] = sorted(self.r_f[rid])
+        for (v, vid) in self.v_id.items():
+            self.v_f[vid] = sorted(self.v_f[vid])
 
     def encode(self, situation):
         rv = {}

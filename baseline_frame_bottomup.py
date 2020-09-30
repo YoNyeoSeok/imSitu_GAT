@@ -11,7 +11,7 @@ import torch.utils.data as data
 import torchvision as tv
 import torchvision.transforms as tvt
 import math
-from imsitu import imSituVerbLocalRoleNounEncoder
+from imsitu import imSituVerbFrameRoleNounEncoder
 from imsitu import imSituTensorEvaluation
 from imsitu import imSituSituation
 from imsitu import imSituSimpleImageFolder
@@ -598,7 +598,7 @@ def main():
         dev_set = json.load(open(args.dataset_dir+"/dev.json"))
 
         if args.encoding_file is None:
-            encoder = imSituVerbLocalRoleNounEncoder(train_set)
+            encoder = imSituVerbFrameRoleNounEncoder(train_set)
             torch.save(encoder, args.output_dir + "/encoder")
         else:
             encoder = torch.load(args.encoding_file)
