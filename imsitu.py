@@ -427,6 +427,145 @@ class imSituVerbLocalRoleNounEncoder(imSituVerbRoleNounEncoder):
         return rv
 
 
+class imSituVerbFrameRoleNounEncoder:
+
+    def n_verbs(self): return len(self.v_id)
+    def n_nouns(self): return len(self.n_id)
+    def n_roles(self): return len(self.r_id)
+    def verbposition_role(self, v, i): return self.v_r[v][i]
+    def verb_nroles(self, v): return len(self.v_r[v])
+    def roleposition_verb(self, r, i): return self.r_v[r][i]
+    def role_nverbs(self, r): return len(self.r_v[r])
+    def max_roles(self): return self.mr
+    def pad_symbol(self): return -1
+    def unk_symbol(self): return -2
+
+    def __init__(self, dataset):
+        self.v_id = {}
+        self.id_v = {}
+
+        self.r_id = {}
+        self.id_r = {}
+
+        self.id_n = {}
+        self.n_id = {}
+
+        self.mr = 0
+
+        self.v_r = {}
+        self.r_v = {}
+
+        for (image, annotation) in dataset.items():
+            v = annotation["verb"]
+            if v not in self.v_id:
+                _id = len(self.v_id)
+                self.v_id[v] = _id
+                self.id_v[_id] = v
+                self.v_r[_id] = []
+            vid = self.v_id[v]
+            for frame in annotation["frames"]:
+                for (r, n) in frame.items():
+                    if r not in self.r_id:
+                        _id = len(self.r_id)
+                        self.r_id[r] = _id
+                        self.id_r[_id] = r
+                        self.r_v[_id] = [vid]
+
+                    if n not in self.n_id:
+                        _id = len(self.n_id)
+                        self.n_id[n] = _id
+                        self.id_n[_id] = n
+
+                    rid = self.r_id[r]
+                    if rid not in self.v_r[vid]:
+                        self.v_r[vid].append(rid)
+                    if vid not in self.r_v[rid]:
+                        self.r_v[rid].append(vid)
+
+        for (v, rs) in self.v_r.items():
+            if len(rs) > self.mr:
+                self.mr = len(rs)
+
+        for (v, vid) in self.v_id.items():
+            self.v_r[vid] = sorted(self.v_r[vid])
+        for (r, rid) in self.r_id.items():
+            self.r_v[rid] = sorted(self.r_v[rid])
+
+    def encode(self, situation):
+        rv = {}
+        verb = self.v_id[situation["verb"]]
+        rv["verb"] = verb
+        rv["frames"] = []
+        for frame in situation["frames"]:
+            _e = []
+            for (r, n) in frame.items():
+                if r in self.r_id:
+                    _rid = self.r_id[r]
+                else:
+                    _rid = self.unk_symbol()
+                if n in self.n_id:
+                    _nid = self.n_id[n]
+                else:
+                    _nid = self.unk_symbol()
+                _e.append((_rid, _nid))
+            rv["frames"].append(_e)
+        return rv
+
+    def decode(self, situation):
+        verb = self.id_v[situation["verb"]]
+        rv = {"verb": verb, "frames": []}
+        for frame in situation["frames"]:
+            _fr = {}
+            for (r, n) in frame.items():
+                _fr[self.id_r[r]] = self.id_n[n]
+            rv["frames"].append(_fr)
+        return rv
+
+    # takes a list of situations
+    def to_tensor(self, situations, use_role=True, use_verb=True):
+        rv = []
+        for situation in situations:
+            _rv = self.encode(situation)
+            verb = _rv["verb"]
+            items = []
+            if use_verb:
+                items.append(verb)
+            for frame in _rv["frames"]:
+                # sort roles
+                _f = sorted(frame, key=lambda x: x[0])
+                k = 0
+                for (r, n) in _f:
+                    if use_role:
+                        items.append(r)
+                    items.append(n)
+                    k += 1
+                while k < self.mr:
+                    if use_role:
+                        items.append(self.pad_symbol())
+                    items.append(self.pad_symbol())
+                    k += 1
+            rv.append(torch.LongTensor(items))
+        return torch.cat(rv)
+
+    # the tensor is BATCH x VERB X FRAME
+    def to_situation(self, tensor):
+        (batch, verbd, _) = tensor.size()
+        rv = []
+        for b in range(0, batch):
+            _tensor = tensor[b]
+            #_rv = []
+            for verb in range(0, verbd):
+                args = []
+                __tensor = _tensor[verb]
+                for j in range(0, self.verb_nroles(verb)):
+                    n = __tensor.data[j]
+                    args.append((self.verbposition_role(verb, j), n))
+                situation = {"verb": verb, "frames": [args]}
+                rv.append(self.decode(situation))
+            # rv.append(_rv)
+        return rv
+
+
 class imSituSimpleImageFolder(data.Dataset):
     # partially borrowed from ImageFolder dataset, but eliminating the assumption about labels
     def is_image_file(self, filename):
