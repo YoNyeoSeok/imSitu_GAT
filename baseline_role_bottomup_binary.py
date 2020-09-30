@@ -140,7 +140,7 @@ class BaselineRoleBottomUpBinary(nn.Module):
     def dev_preprocess(self): return self.dev_transform
 
     # prediction type can be "max_max" or "max_marginal"
-    def __init__(self, encoding, node_hidden_layer,
+    def __init__(self, encoding, node_hidden_layer, binary_loss_weight,
                  prediction_type="max_max", device_array=[0], cnn_type="resnet_101"):
         super(BaselineRoleBottomUpBinary, self).__init__()
 
@@ -168,6 +168,7 @@ class BaselineRoleBottomUpBinary(nn.Module):
         self.node_hidden_layer = node_hidden_layer
         self.prediction_type = prediction_type
         self.n_verbs = encoding.n_verbs()
+        self.binary_loss_weight = binary_loss_weight
         # cnn
         print(cnn_type)
         if cnn_type == "resnet_101":
@@ -218,7 +219,7 @@ class BaselineRoleBottomUpBinary(nn.Module):
             nn.Sequential(*hidden_layer)
             for r in range(self.encoding.n_roles())])
 
-        # verb potential
+        # verb-noun potentials
         self.linear_rv = nn.ModuleList([
             nn.Linear(node_size, len(rv))
             for r, rv in self.encoding.r_v.items()])
@@ -234,13 +235,23 @@ class BaselineRoleBottomUpBinary(nn.Module):
         for r, rn in self.encoding.r_id_n.items():
             self.total_rn += len(rn)
 
-        print("total rv: {0}, total rn : {1}, encoding rn : {2}".format(
-            self.total_rv, self.total_rn, encoding.n_rolenoun()))
+        # role binary potentials
+        self.linear_bi = nn.ModuleList([
+            nn.Linear(node_size, 1)
+            for r in self.encoding.r_id])
+        self.total_bi = 0
+        for r in self.encoding.r_id:
+            self.total_bi += 1
+
+        print("total rv: {0}, total rn : {1}, total bi: {2}, encoding rn : {3}".format(
+            self.total_rv, self.total_rn, self.total_bi, encoding.n_rolenoun()))
 
         # initilize everything
         for _l in self.linear_rv:
             initLinear(_l)
         for _l in self.linear_rn:
+            initLinear(_l)
+        for _l in self.linear_bi:
             initLinear(_l)
 
     def forward_features(self, images):
@@ -298,6 +309,22 @@ class BaselineRoleBottomUpBinary(nn.Module):
                 _rv_potential.logsumexp(dim=1, keepdim=True)
         v_potential = rv_potential.logsumexp(dim=1)
 
+        bi_potential = []
+        for i, bi_group in enumerate(self.linear_bi):
+            _bi_potential = bi_group(role_rep[i])
+            bi_potential.append(_bi_potential)
+        bi_potential = torch.cat(bi_potential, dim=1)
+
+        bi_rv_potential = torch.full((batch_size, self.encoding.n_roles(), self.n_verbs), float('-inf')
+                                     ).to(rn_marginal.device)
+        for i in range(self.encoding.n_roles()):
+            v_idx = torch.LongTensor(
+                self.encoding.r_v[i]).to(bi_rv_potential.device)
+            bi_rv_potential[:, i, v_idx] = \
+                rv_potential[:, i, v_idx] * bi_potential[:, i, None]
+
+        v_potential = bi_rv_potential.logsumexp(dim=1)
+
         marginal = rn_marginal_grouped.sum(2).view(
             batch_size, self.n_verbs) + v_potential
 
@@ -307,11 +334,11 @@ class BaselineRoleBottomUpBinary(nn.Module):
             batch_size, self.n_verbs) + v_potential  # these are the scores
 
         if self.prediction_type == "max_max":
-            rv = (rep, v_potential, rn_potential,
+            rv = (rep, v_potential, [rn_potential, bi_potential],
                   norm, _max, r_maxi_grouped)
         elif self.prediction_type == "max_marginal":
-            rv = (rep, v_potential, rn_potential,
-                  norm, marginal, r_maxi_grouped)
+            rv = (rep, rn_marginal, [rn_potential, bi_potential],
+                  norm, v_potential, r_maxi_grouped)
         else:
             print("unkown inference type")
             rv = ()
@@ -348,9 +375,11 @@ class BaselineRoleBottomUpBinary(nn.Module):
                     loss = loss + pots - _norm
         return -loss/(batch_size*n_refs)
 
-    def mil_loss(self, v_potential, rn_potential, norm,  situations, n_refs):
+    def mil_loss(self, v_potential, rn_bi_potential, norm,  situations, n_refs):
+        rn_potential, bi_potential = rn_bi_potential
         batch_size = v_potential.size()[0]
         mr = self.encoding.max_roles()
+        bi_target = torch.zeros_like(bi_potential)
         for i in range(0, batch_size):
             _norm = norm[i]
             _v = v_potential[i]
@@ -375,7 +404,9 @@ class BaselineRoleBottomUpBinary(nn.Module):
                 loss = _tot
             else:
                 loss = loss + _tot
-        return -loss/batch_size
+            bi_target[i][self.encoding.v_r[v.item()]] = 1
+        return ((-loss/batch_size),
+                self.binary_loss_weight*nn.BCEWithLogitsLoss()(bi_potential, bi_target))
 
 
 def format_dict(d, s, p):
@@ -483,11 +514,11 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
                 print("forward time = {}".format(time.time() - t1))
             optimizer.zero_grad()
             t1 = time.time()
-            loss = model.mil_loss(v, rn, norm, target, 3)
+            loss, bi_loss = model.mil_loss(v, rn, norm, target, 3)
             if timing:
                 print("loss time = {}".format(time.time() - t1))
             t1 = time.time()
-            loss.backward()
+            (loss+bi_loss).backward()
             # print loss
             if timing:
                 print("backward time = {}".format(time.time() - t1))
@@ -505,11 +536,16 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
             if total_steps % print_freq == 0:
                 top1_a = top1.get_average_results()
                 top5_a = top5.get_average_results()
-                print("{},{},{}, {} , {}, loss = {:.2f}, avg loss = {:.2f}, batch time = {:.2f}".format(total_steps-1, k, i, format_dict(top1_a, "{:.2f}", "1-"), format_dict(
-                    top5_a, "{:.2f}", "5-"), loss.item(), loss_total / ((total_steps-1) % eval_frequency), (time.time() - time_all) / ((total_steps-1) % eval_frequency)))
+                print("{},{},{}, {} , {}, loss = {:.2f}, bi loss = {:.2f}, avg total loss = {:.2f}, batch time = {:.2f}".format(
+                    total_steps - 1, k, i,
+                    format_dict(top1_a, "{:.2f}", "1-"),
+                    format_dict(top5_a, "{:.2f}", "5-"),
+                    loss.item(), bi_loss.item(),  loss_total / ((total_steps-1) % eval_frequency),
+                    (time.time() - time_all) / ((total_steps-1) % eval_frequency)))
                 if args.use_wandb:
                     wandb.log({
                         'train/loss': loss.item(),
+                        'train/bi_loss': bi_loss.item(),
                         'train/avg_loss': loss_total / ((total_steps-1) % eval_frequency),
                     }, step=total_steps)
                     wandb.log({'train/top1-{}'.format(k): v for k, v in top1_a.items()},
@@ -572,6 +608,10 @@ def main():
                         help="a file corresponding to the encoder")
     parser.add_argument("--cnn_type", choices=["resnet_34", "resnet_50", "resnet_101"],
                         default="resnet_101", help="the cnn to initilize")
+    parser.add_argument("--node_hidden_layer", type=int, nargs='*', default=[32],
+                        help="the role node hidden layer sizes")
+    parser.add_argument("--binary_loss_weight", type=float, default=50,
+                        help='binary loss weight compare to imsitu loss weight')
     parser.add_argument("--batch_size", default=64,
                         help="batch size for training", type=int)
     parser.add_argument("--learning_rate", default=1e-5,
@@ -602,8 +642,8 @@ def main():
         else:
             encoder = torch.load(args.encoding_file)
 
-        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type,
-                                     device_array=args.device_array)
+        model = BaselineRoleBottomUpBinary(encoder, cnn_type=args.cnn_type, node_hidden_layer=args.node_hidden_layer,
+                                           binary_loss_weight=args.binary_loss_weight, device_array=args.device_array)
 
         if args.weights_file is not None:
             model.load_state_dict(torch.load(args.weights_file))
