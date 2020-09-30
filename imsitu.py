@@ -590,6 +590,77 @@ class imSituVerbFrameRoleNounEncoder:
         return rv
 
 
+class imSituVerbFrameLocalRoleNounEncoder(imSituVerbFrameRoleNounEncoder):
+
+    def n_rolenoun(self): return self.total_rn
+
+    def __init__(self, dataset):
+        super(imSituVerbFrameLocalRoleNounEncoder, self).__init__(dataset)
+        self.r_n_id = {}
+        self.r_id_n = {}
+
+        self.total_rn = 0
+
+        for (image, annotation) in dataset.items():
+            v = self.v_id[annotation["verb"]]
+
+            for frame in annotation["frames"]:
+                for(r, n) in frame.items():
+                    r = self.r_id[r]
+                    n = self.n_id[n]
+
+                    if r not in self.r_n_id:
+                        self.r_n_id[r] = {}
+                        self.r_id_n[r] = {}
+
+                    if n not in self.r_n_id[r]:
+                        _id = len(self.r_n_id[r])
+                        self.r_n_id[r][n] = _id
+                        self.r_id_n[r][_id] = n
+                        self.total_rn += 1
+
+    def encode(self, situation):
+        v = self.v_id[situation["verb"]]
+        rv = {"verb": v, "frames": []}
+        for frame in situation["frames"]:
+            _e = []
+            for (r, n) in frame.items():
+                if r not in self.r_id:
+                    r = self.unk_symbol()
+                else:
+                    r = self.r_id[r]
+                if n not in self.n_id:
+                    n = self.unk_symbol()
+                else:
+                    n = self.n_id[n]
+                if n not in self.r_n_id[r]:
+                    rn = self.unk_symbol()
+                else:
+                    rn = self.r_n_id[r][n]
+                _e.append((r, rn))
+            rv["frames"].append(_e)
+        return rv
+
+    def decode(self, situation):
+        # print situation
+        verb = self.id_v[situation["verb"]]
+        rv = {"verb": verb, "frames": []}
+        for frame in situation["frames"]:
+            _fr = {}
+            for (r, rn) in frame:
+                rn = rn.item()
+                # print(self.vr_id_n)
+                if rn not in self.r_id_n[r]:
+                    print("index error, verb = {}".format(verb))
+                    n = -1
+                else:
+                    n = self.id_n[self.r_id_n[r][rn]]
+                r = self.id_r[r]
+                _fr[r] = n
+            rv["frames"].append(_fr)
+        return rv
+
+
 class imSituSimpleImageFolder(data.Dataset):
     # partially borrowed from ImageFolder dataset, but eliminating the assumption about labels
     def is_image_file(self, filename):

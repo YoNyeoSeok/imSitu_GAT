@@ -11,7 +11,7 @@ import torch.utils.data as data
 import torchvision as tv
 import torchvision.transforms as tvt
 import math
-from imsitu import imSituVerbFrameRoleNounEncoder
+from imsitu import imSituVerbFrameLocalRoleNounEncoder
 from imsitu import imSituTensorEvaluation
 from imsitu import imSituSituation
 from imsitu import imSituSimpleImageFolder
@@ -191,16 +191,18 @@ class BaselineFrameBottomUp(nn.Module):
         for v in self.encoding.id_v:
             offset = max_roles*v
             # stored in role order
-            roles = self.encoding.v_r[v]
-            k = 0
-            for r in roles:
-                # add one to account of the 0th element being the padding
-                self.v_r[offset + k] = r + 1
-                k += 1
-            # pad
-            while k < max_roles:
-                self.v_r[offset + k] = 0
-                k += 1
+            vf = self.encoding.v_f[v]
+            for f in vf:
+                roles = self.encoding.f_r[f]
+                k = 0
+                for r in roles:
+                    # add one to account of the 0th element being the padding
+                    self.v_r[offset + k] = r + 1
+                    k += 1
+                # pad
+                while k < max_roles:
+                    self.v_r[offset + k] = 0
+                    k += 1
 
         for g in device_array:
             self.broadcast.append(
@@ -214,17 +216,17 @@ class BaselineFrameBottomUp(nn.Module):
                              nn.ReLU(), nn.Dropout(.5)]
             node_size = node_size_
 
-        self.role_node = nn.ModuleList([
+        self.frame_node = nn.ModuleList([
             nn.Sequential(*hidden_layer)
-            for r in range(self.encoding.n_roles())])
+            for f in range(self.encoding.n_frames())])
 
         # verb potential
-        self.linear_rv = nn.ModuleList([
-            nn.Linear(node_size, len(rv))
-            for r, rv in self.encoding.r_v.items()])
-        self.total_rv = 0
-        for r, rv in self.encoding.r_v.items():
-            self.total_rv += len(rv)
+        self.linear_fv = nn.ModuleList([
+            nn.Linear(node_size, len(fv))
+            for f, fv in self.encoding.f_v.items()])
+        self.total_fv = 0
+        for _, fv in self.encoding.f_v.items():
+            self.total_fv += len(fv)
 
         # role-noun potentials
         self.linear_rn = nn.ModuleList([
@@ -234,11 +236,11 @@ class BaselineFrameBottomUp(nn.Module):
         for r, rn in self.encoding.r_id_n.items():
             self.total_rn += len(rn)
 
-        print("total rv: {0}, total rn : {1}, encoding rn : {2}".format(
-            self.total_rv, self.total_rn, encoding.n_rolenoun()))
+        print("total fv: {0}, total rn : {1}, encoding rn : {2}".format(
+            self.total_fv, self.total_rn, encoding.n_rolenoun()))
 
         # initilize everything
-        for _l in self.linear_rv:
+        for _l in self.linear_fv:
             initLinear(_l)
         for _l in self.linear_rn:
             initLinear(_l)
@@ -250,68 +252,68 @@ class BaselineFrameBottomUp(nn.Module):
         batch_size = image.size()[0]
 
         rep = self.cnn(image)
-        device = rep.device
-        role_rep = [role_node(rep)
-                    for role_node in self.role_node]
+        frame_rep = [frame_node(rep)
+                     for frame_node in self.frame_node]
 
-        rn_potential = []
-        rn_marginal = []
-        r_max = []
-        r_maxi = []
-        for i, rn_group in enumerate(self.linear_rn):
-            _rn_potential = rn_group(role_rep[i])
-            rn_potential.append(_rn_potential)
+        frn_potential = []
+        frn_marginal = []
+        fr_max = []
+        fr_maxi = []
+        for f, f_rep in enumerate(frame_rep):
+            for r in self.encoding.f_r[f]:
+                frn_group = self.linear_rn[r]
+                _frn_potential = frn_group(f_rep)
+                frn_potential.append(_frn_potential)
 
-            _rn_marginal = _rn_potential.logsumexp(1, keepdim=True)
-            rn_marginal.append(_rn_marginal)
+                _frn_marginal = _frn_potential.logsumexp(1, keepdim=True)
+                frn_marginal.append(_frn_marginal)
 
-            _r_max, _r_maxi = _rn_potential.max(1, keepdim=True)
-            r_maxi.append(_r_maxi)
-            r_max.append(_r_max)
+                _fr_max, _fr_maxi = _frn_potential.max(1, keepdim=True)
+                fr_maxi.append(_fr_maxi)
+                fr_max.append(_fr_max)
 
         # concat role groups with the padding symbol
         zeros = Variable(torch.zeros(batch_size, 1))  # this is the padding
         zerosi = Variable(torch.LongTensor(batch_size, 1).zero_())
-        rn_marginal.insert(0, zeros.to(device))
-        r_max.insert(0, zeros.to(device))
-        r_maxi.insert(0, zerosi.to(device))
+        frn_marginal.insert(0, zeros.to(rep.device))
+        fr_max.insert(0, zeros.to(rep.device))
+        fr_maxi.insert(0, zerosi.to(rep.device))
 
-        rn_marginal = torch.cat(rn_marginal, 1)
-        r_max = torch.cat(r_max, 1)
-        r_maxi = torch.cat(r_maxi, 1)
+        frn_marginal = torch.cat(frn_marginal, 1)
+        fr_max = torch.cat(fr_max, 1)
+        fr_maxi = torch.cat(fr_maxi, 1)
 
         v_r = self.broadcast[torch.cuda.current_device()]
-        rn_marginal_grouped = rn_marginal.index_select(1, v_r).view(
+        frn_marginal_grouped = frn_marginal.index_select(1, v_r).view(
             batch_size, self.n_verbs, self.encoding.max_roles())
-        r_max_grouped = r_max.index_select(1, v_r).view(
+        fr_max_grouped = fr_max.index_select(1, v_r).view(
             batch_size, self.n_verbs, self.encoding.max_roles())
-        r_maxi_grouped = r_maxi.index_select(1, v_r).view(
+        fr_maxi_grouped = fr_maxi.index_select(1, v_r).view(
             batch_size, self.n_verbs, self.encoding.max_roles())
 
-        rv_potential = torch.full((batch_size, self.encoding.n_roles(), self.n_verbs), float('-inf')
-                                  ).to(device)
-        for i, rv_group in enumerate(self.linear_rv):
-            _rv_potential = rv_group(role_rep[i])
+        fv_potential = torch.full((batch_size, self.encoding.n_frames(), self.n_verbs), float('-inf')
+                                  ).to(frn_marginal.device)
+        for f, (fv_group, f_rep) in enumerate(zip(self.linear_fv, frame_rep)):
+            _fv_potential = fv_group(f_rep)
             v_idx = torch.LongTensor(
-                self.encoding.r_v[i]).to(device)
-            rv_potential[:, i, v_idx] = _rv_potential - \
-                _rv_potential.logsumexp(dim=1, keepdim=True)
-        v_potential = rv_potential.logsumexp(dim=1)
+                self.encoding.f_v[f]).to(_fv_potential.device)
+            fv_potential[:, f, v_idx] = _fv_potential
+        v_potential = fv_potential.logsumexp(dim=1)
 
-        marginal = rn_marginal_grouped.sum(2).view(
+        marginal = frn_marginal_grouped.sum(2).view(
             batch_size, self.n_verbs) + v_potential
 
         norm = marginal.logsumexp(1)
 
-        _max = r_max_grouped.sum(2).view(
+        _max = fr_max_grouped.sum(2).view(
             batch_size, self.n_verbs) + v_potential  # these are the scores
 
         if self.prediction_type == "max_max":
-            rv = (rep, v_potential, rn_potential,
-                  norm, _max, r_maxi_grouped)
+            rv = (rep, v_potential, frn_potential,
+                  norm, _max, fr_maxi_grouped)
         elif self.prediction_type == "max_marginal":
-            rv = (rep, rn_marginal, rn_potential,
-                  norm, v_potential, r_maxi_grouped)
+            rv = (rep, frn_marginal, frn_potential,
+                  norm, v_potential, fr_maxi_grouped)
         else:
             print("unkown inference type")
             rv = ()
@@ -348,21 +350,25 @@ class BaselineFrameBottomUp(nn.Module):
                     loss = loss + pots - _norm
         return -loss/(batch_size*n_refs)
 
-    def mil_loss(self, v_potential, rn_potential, norm,  situations, n_refs):
+    def mil_loss(self, v_potential, frn_potential, norm,  situations, n_refs):
         batch_size = v_potential.size()[0]
         mr = self.encoding.max_roles()
         for i in range(0, batch_size):
             _norm = norm[i]
             _v = v_potential[i]
-            _rn = []
+            _frn = []
             _ref = situations[i]
-            for pot in rn_potential:
-                _rn.append(pot[i])
+            for pot in frn_potential:
+                _frn.append(pot[i])
             for ref in range(0, n_refs):
                 v = _ref[0]
                 pots = _v[v]
-                for (pos, r) in enumerate(self.encoding.v_r[v.item()]):
-                    pots = pots + _rn[r][_ref[1 + 2*mr*ref + 2*pos + 1]]
+                vf = self.encoding.v_f[v.item()]
+                for f in vf:
+                    fr = sum([len(self.encoding.f_r[_f]) for _f in range(f)])
+                    for (pos, r) in enumerate(self.encoding.f_r[f]):
+                        pots = pots + \
+                            _frn[fr+pos][_ref[1 + 2*mr*ref + 2*pos + 1]]
                 if pots.item() > _norm.item():
                     print("inference error")
                     print(pots)
@@ -598,7 +604,7 @@ def main():
         dev_set = json.load(open(args.dataset_dir+"/dev.json"))
 
         if args.encoding_file is None:
-            encoder = imSituVerbFrameRoleNounEncoder(train_set)
+            encoder = imSituVerbFrameLocalRoleNounEncoder(train_set)
             torch.save(encoder, args.output_dir + "/encoder")
         else:
             encoder = torch.load(args.encoding_file)
