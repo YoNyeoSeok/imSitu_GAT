@@ -135,14 +135,14 @@ class ResNetModifiedSmall(nn.Module):
         return self.dropout(self.relu(self.linear(x.view(-1, 7*7*self.base_size()))))
 
 
-class BaselineRoleBottomUp(nn.Module):
+class BaselineFrameBottomUp(nn.Module):
     def train_preprocess(self): return self.train_transform
     def dev_preprocess(self): return self.dev_transform
 
     # prediction type can be "max_max" or "max_marginal"
     def __init__(self, encoding, node_hidden_layer,
                  prediction_type="max_max", device_array=[0], cnn_type="resnet_101"):
-        super(BaselineRoleBottomUp, self).__init__()
+        super(BaselineFrameBottomUp, self).__init__()
 
         self.normalize = tv.transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -453,7 +453,7 @@ def eval_model(dataset_loader, encoding, model, device):
 
 def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, encoding, optimizer, save_dir, device_array, args, timing=False):
     if args.use_wandb:
-        wandb.init(project='imSitu_YYS3', name='Role_BottomUp', config=args)
+        wandb.init(project='imSitu_YYS3', name='Frame_BottomUp', config=args)
     model.train()
 
     time_all = time.time()
@@ -603,8 +603,8 @@ def main():
         else:
             encoder = torch.load(args.encoding_file)
 
-        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type, node_hidden_layer=args.node_hidden_layer,
-                                     device_array=args.device_array)
+        model = BaselineFrameBottomUp(encoder, cnn_type=args.cnn_type, node_hidden_layer=args.node_hidden_layer,
+                                      device_array=args.device_array)
 
         if args.weights_file is not None:
             model.load_state_dict(torch.load(args.weights_file))
@@ -637,7 +637,7 @@ def main():
         else:
             encoder = torch.load(args.encoding_file)
         print("creating model...")
-        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type)
+        model = BaselineFrameBottomUp(encoder, cnn_type=args.cnn_type)
 
         if args.weights_file is None:
             print("expecting weight file to run features")
@@ -673,7 +673,7 @@ def main():
             encoder = torch.load(args.encoding_file)
 
         print("creating model...")
-        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type)
+        model = BaselineFrameBottomUp(encoder, cnn_type=args.cnn_type)
 
         if args.weights_file is None:
             print("expecting weight file to run features")
@@ -699,7 +699,7 @@ def main():
             encoder = torch.load(args.encoding_file)
 
         print("creating model...")
-        model = BaselineRoleBottomUp(encoder, cnn_type=args.cnn_type)
+        model = BaselineFrameBottomUp(encoder, cnn_type=args.cnn_type)
 
         if args.weights_file is None:
             print("expecting weight file to run features")
