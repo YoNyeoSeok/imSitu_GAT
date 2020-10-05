@@ -397,7 +397,7 @@ def compute_features(dataset_loader, simple_dataset,  model, outdir):
     print("\ndone.")
 
 
-def eval_model(dataset_loader, encoding, model):
+def eval_model(dataset_loader, encoding, model, device):
     model.eval()
     print("evaluating model...")
     top1 = imSituTensorEvaluation(1, 3, encoding)
@@ -407,8 +407,8 @@ def eval_model(dataset_loader, encoding, model):
     with torch.no_grad():
         for i, (index, input, target) in enumerate(dataset_loader):
             print("{}/{} batches\r".format(i+1, mx)),
-            input_var = input.cuda()
-            target_var = target.cuda()
+            input_var = input.to(device)
+            target_var = target.to(device)
             _, _, _, _, scores, predictions = model.forward(input_var)
             (s_sorted, idx) = torch.sort(scores, 1, True)
             top1.add_point(target, predictions.data, idx.data)
@@ -485,8 +485,8 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
             if total_steps % eval_frequency == 0:
                 print("eval...")
                 etime = time.time()
-                (top1, top5) = eval_model(
-                    dev_loader, encoding, pmodel)
+                (top1, top5) = eval_model(dev_loader, encoding,
+                                          pmodel, torch.device(device_array[0]))
                 model.train()
                 print("... done after {:.2f} s".format(time.time() - etime))
                 top1_a = top1.get_average_results()
@@ -557,6 +557,7 @@ def main():
     parser.add_argument("--use_wandb", action='store_true')
 
     args = parser.parse_args()
+    device = torch.device(args.device_array[0])
     if args.command == "train":
         print("command = training")
         train_set = json.load(open(args.dataset_dir+"/train.json"))
@@ -586,7 +587,7 @@ def main():
         dev_loader = torch.utils.data.DataLoader(
             dataset_dev, batch_size=batch_size, shuffle=True)  # , num_workers = 3)
 
-        model.cuda(args.device_array[0])
+        # model.cuda(args.device_array[0])
         optimizer = optim.Adam(
             model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
         train_model(args.training_epochs, args.eval_frequency, train_loader,
@@ -610,7 +611,7 @@ def main():
 
         print("loading model weights...")
         model.load_state_dict(torch.load(args.weights_file))
-        model.cuda()
+        # model.cuda()
 
         dataset = imSituSituation(
             args.image_dir, eval_file, encoder, model.dev_preprocess())
