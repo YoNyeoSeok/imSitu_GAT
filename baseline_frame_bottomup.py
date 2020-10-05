@@ -185,7 +185,7 @@ class BaselineFrameBottomUp(nn.Module):
         max_roles = encoding.max_roles()
 
         # need a list that is nverbs by 6
-        self.v_r = [0 for i in range(0, self.encoding.n_verbs()*max_roles)]
+        self.fr_r = [0 for i in range(0, self.encoding.n_verbs()*max_roles)]
 
         # and we need to compute the position of the corresponding roles, and pad with the 0 symbol
         for v in self.encoding.id_v:
@@ -194,19 +194,20 @@ class BaselineFrameBottomUp(nn.Module):
             vf = self.encoding.v_f[v]
             for f in vf:
                 roles = self.encoding.f_r[f]
+                fr = sum([len(self.encoding.f_r[_f]) for _f in range(f)])
                 k = 0
-                for r in roles:
+                for pos, _ in enumerate(roles):
                     # add one to account of the 0th element being the padding
-                    self.v_r[offset + k] = r + 1
+                    self.fr_r[offset + k] = fr + pos + 1
                     k += 1
                 # pad
                 while k < max_roles:
-                    self.v_r[offset + k] = 0
+                    self.fr_r[offset + k] = 0
                     k += 1
 
         for g in device_array:
             self.broadcast.append(
-                Variable(torch.LongTensor(self.v_r).cuda(g)))
+                Variable(torch.LongTensor(self.fr_r).cuda(g)))
 
         hidden_layer = [nn.Identity()] if len(
             self.node_hidden_layer) == 0 else []
@@ -283,12 +284,12 @@ class BaselineFrameBottomUp(nn.Module):
         fr_max = torch.cat(fr_max, 1)
         fr_maxi = torch.cat(fr_maxi, 1)
 
-        v_r = self.broadcast[torch.cuda.current_device()]
-        frn_marginal_grouped = frn_marginal.index_select(1, v_r).view(
+        fr_r = self.broadcast[torch.cuda.current_device()]
+        frn_marginal_grouped = frn_marginal.index_select(1, fr_r).view(
             batch_size, self.n_verbs, self.encoding.max_roles())
-        fr_max_grouped = fr_max.index_select(1, v_r).view(
+        fr_max_grouped = fr_max.index_select(1, fr_r).view(
             batch_size, self.n_verbs, self.encoding.max_roles())
-        fr_maxi_grouped = fr_maxi.index_select(1, v_r).view(
+        fr_maxi_grouped = fr_maxi.index_select(1, fr_r).view(
             batch_size, self.n_verbs, self.encoding.max_roles())
 
         fv_potential = torch.full((batch_size, self.encoding.n_frames(), self.n_verbs), float('-inf')
