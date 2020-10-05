@@ -11,7 +11,7 @@ import torch.utils.data as data
 import torchvision as tv
 import torchvision.transforms as tvt
 import math
-from imsitu import imSituVerbFrameLocalRoleNounEncoder
+from imsitu import imSituVerbLocalFrameRoleNounEncoder
 from imsitu import imSituTensorEvaluation
 from imsitu import imSituSituation
 from imsitu import imSituSimpleImageFolder
@@ -197,11 +197,12 @@ class BaselineFrameRoleBottomUp(nn.Module):
                 k = 0
                 for r in roles:
                     # add one to account of the 0th element being the padding
-                    self.v_r[offset + k] = r + 1
+                    fr = self.encoding.fr_id[(f, r)]
+                    self.fr_r[offset + k] = fr + 1
                     k += 1
                 # pad
                 while k < max_roles:
-                    self.v_r[offset + k] = 0
+                    self.fr_r[offset + k] = 0
                     k += 1
 
         for g in device_array:
@@ -222,27 +223,27 @@ class BaselineFrameRoleBottomUp(nn.Module):
 
         # verb potential
         self.linear_fv = nn.ModuleList([
-            nn.Linear(node_size, len(fv))
-            for f, fv in self.encoding.f_v.items()])
+            nn.Linear(node_size, len(self.encoding.f_v[f]))
+            for f in range(self.encoding.n_frames())])
         self.total_fv = 0
-        for _, fv in self.encoding.f_v.items():
-            self.total_fv += len(fv)
+        for f in range(self.encoding.n_frames()):
+            self.total_fv += len(self.encoding.f_v[f])
 
-        # role-noun potentials
-        self.linear_rn = nn.ModuleList([
-            nn.Linear(node_size, len(rn))
-            for r, rn in self.encoding.r_id_n.items()])
-        self.total_rn = 0
-        for r, rn in self.encoding.r_id_n.items():
-            self.total_rn += len(rn)
+        # frame-role-noun potentials
+        self.linear_frn = nn.ModuleList([
+            nn.Linear(node_size, len(self.encoding.fr_id_n[fr]))
+            for fr in range(self.encoding.n_framerole())])
+        self.total_frn = 0
+        for fr in range(self.encoding.n_framerole()):
+            self.total_frn += len(self.encoding.fr_id_n[fr])
 
-        print("total fv: {0}, total rn : {1}, encoding rn : {2}".format(
-            self.total_fv, self.total_rn, encoding.n_rolenoun()))
+        print("total fv: {0}, total frn : {1}, encoding frn : {2}".format(
+            self.total_fv, self.total_frn, encoding.n_framerolenoun()))
 
         # initilize everything
         for _l in self.linear_fv:
             initLinear(_l)
-        for _l in self.linear_rn:
+        for _l in self.linear_frn:
             initLinear(_l)
 
     def forward_features(self, images):
@@ -259,18 +260,17 @@ class BaselineFrameRoleBottomUp(nn.Module):
         frn_marginal = []
         fr_max = []
         fr_maxi = []
-        for f, f_rep in enumerate(frame_rep):
-            for r in self.encoding.f_r[f]:
-                frn_group = self.linear_rn[r]
-                _frn_potential = frn_group(f_rep)
-                frn_potential.append(_frn_potential)
+        for fr, frn_group in enumerate(self.linear_frn):
+            f, r = self.encoding.id_fr[fr]
+            _frn_potential = frn_group(frame_rep[f])
+            frn_potential.append(_frn_potential)
 
-                _frn_marginal = _frn_potential.logsumexp(1, keepdim=True)
-                frn_marginal.append(_frn_marginal)
+            _frn_marginal = _frn_potential.logsumexp(1, keepdim=True)
+            frn_marginal.append(_frn_marginal)
 
-                _fr_max, _fr_maxi = _frn_potential.max(1, keepdim=True)
-                fr_maxi.append(_fr_maxi)
-                fr_max.append(_fr_max)
+            _fr_max, _fr_maxi = _frn_potential.max(1, keepdim=True)
+            fr_maxi.append(_fr_maxi)
+            fr_max.append(_fr_max)
 
         # concat role groups with the padding symbol
         zeros = Variable(torch.zeros(batch_size, 1))  # this is the padding
@@ -283,12 +283,12 @@ class BaselineFrameRoleBottomUp(nn.Module):
         fr_max = torch.cat(fr_max, 1)
         fr_maxi = torch.cat(fr_maxi, 1)
 
-        v_r = self.broadcast[torch.cuda.current_device()]
-        frn_marginal_grouped = frn_marginal.index_select(1, v_r).view(
+        fr_r = self.broadcast[torch.cuda.current_device()]
+        frn_marginal_grouped = frn_marginal.index_select(1, fr_r).view(
             batch_size, self.n_verbs, self.encoding.max_roles())
-        fr_max_grouped = fr_max.index_select(1, v_r).view(
+        fr_max_grouped = fr_max.index_select(1, fr_r).view(
             batch_size, self.n_verbs, self.encoding.max_roles())
-        fr_maxi_grouped = fr_maxi.index_select(1, v_r).view(
+        fr_maxi_grouped = fr_maxi.index_select(1, fr_r).view(
             batch_size, self.n_verbs, self.encoding.max_roles())
 
         fv_potential = torch.full((batch_size, self.encoding.n_frames(), self.n_verbs), float('-inf')
@@ -365,10 +365,10 @@ class BaselineFrameRoleBottomUp(nn.Module):
                 pots = _v[v]
                 vf = self.encoding.v_f[v.item()]
                 for f in vf:
-                    fr = sum([len(self.encoding.f_r[_f]) for _f in range(f)])
                     for (pos, r) in enumerate(self.encoding.f_r[f]):
+                        fr = self.encoding.fr_id[(f, r)]
                         pots = pots + \
-                            _frn[fr+pos][_ref[1 + 2*mr*ref + 2*pos + 1]]
+                            _frn[fr][_ref[1 + 2*mr*ref + 2*pos + 1]]
                 if pots.item() > _norm.item():
                     print("inference error")
                     print(pots)
@@ -605,7 +605,7 @@ def main():
         dev_set = json.load(open(args.dataset_dir+"/dev.json"))
 
         if args.encoding_file is None:
-            encoder = imSituVerbFrameLocalRoleNounEncoder(train_set)
+            encoder = imSituVerbLocalFrameRoleNounEncoder(train_set)
             torch.save(encoder, args.output_dir + "/encoder")
         else:
             encoder = torch.load(args.encoding_file)
