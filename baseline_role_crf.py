@@ -358,40 +358,42 @@ def predict_human_readable(dataset_loader, simple_dataset, encoder, model, outdi
     model.eval()
     print("predicting...")
     mx = len(dataset_loader)
-    for i, (input, index) in enumerate(dataset_loader):
-        print("{}/{} batches".format(i+1, mx))
-        input_var = torch.autograd.Variable(input.cuda(), volatile=True)
-        _, _, _, _, scores, predictions = model.forward(input_var)
-        # (s_sorted, idx) = torch.sort(scores, 1, True)
-        human = encoder.to_situation(predictions)
-        (b, p, d) = predictions.size()
-        for _b in range(0, b):
-            items = []
-            offset = _b * p
-            for _p in range(0, p):
-                items.append(human[offset + _p])
-                items[-1]["score"] = scores.data[_b][_p].item()
-            items = sorted(items, key=lambda x: -x["score"])[:top_k]
-            name = simple_dataset.images[index[_b][0]].split(".")[:-1]
-            name.append("predictions")
-            outfile = outdir + ".".join(name)
-            json.dump(items, open(outfile, "w"))
+    with torch.no_grad():
+        for i, (input, index) in enumerate(dataset_loader):
+            print("{}/{} batches".format(i+1, mx))
+            input_var = input.cuda()
+            _, _, _, _, scores, predictions = model.forward(input_var)
+            # (s_sorted, idx) = torch.sort(scores, 1, True)
+            human = encoder.to_situation(predictions)
+            (b, p, d) = predictions.size()
+            for _b in range(0, b):
+                items = []
+                offset = _b * p
+                for _p in range(0, p):
+                    items.append(human[offset + _p])
+                    items[-1]["score"] = scores.data[_b][_p].item()
+                items = sorted(items, key=lambda x: -x["score"])[:top_k]
+                name = simple_dataset.images[index[_b][0]].split(".")[:-1]
+                name.append("predictions")
+                outfile = outdir + ".".join(name)
+                json.dump(items, open(outfile, "w"))
 
 
 def compute_features(dataset_loader, simple_dataset,  model, outdir):
     model.eval()
     print("computing features...")
     mx = len(dataset_loader)
-    for i, (input, index) in enumerate(dataset_loader):
-        print("{}/{} batches\r".format(i+1, mx)),
-        input_var = torch.autograd.Variable(input.cuda(), volatile=True)
-        features = model.forward_features(input_var).cpu().data
-        b = index.size()[0]
-        for _b in range(0, b):
-            name = simple_dataset.images[index[_b][0]].split(".")[:-1]
-            name.append("features")
-            outfile = outdir + ".".join(name)
-            torch.save(features[_b], outfile)
+    with torch.no_grad():
+        for i, (input, index) in enumerate(dataset_loader):
+            print("{}/{} batches\r".format(i+1, mx)),
+            input_var = input.cuda()
+            features = model.forward_features(input_var).cpu().data
+            b = index.size()[0]
+            for _b in range(0, b):
+                name = simple_dataset.images[index[_b][0]].split(".")[:-1]
+                name.append("features")
+                outfile = outdir + ".".join(name)
+                torch.save(features[_b], outfile)
     print("\ndone.")
 
 
@@ -402,16 +404,15 @@ def eval_model(dataset_loader, encoding, model):
     top5 = imSituTensorEvaluation(5, 3, encoding)
 
     mx = len(dataset_loader)
-    for i, (index, input, target) in enumerate(dataset_loader):
-        print("{}/{} batches\r".format(i+1, mx)),
-        input_var = torch.autograd.Variable(
-            input, volatile=True)
-        target_var = torch.autograd.Variable(
-            target, volatile=True)
-        _, _, _, _, scores, predictions = model.forward(input_var)
-        (s_sorted, idx) = torch.sort(scores, 1, True)
-        top1.add_point(target, predictions.data, idx.data)
-        top5.add_point(target, predictions.data, idx.data)
+    with torch.no_grad():
+        for i, (index, input, target) in enumerate(dataset_loader):
+            print("{}/{} batches\r".format(i+1, mx)),
+            input_var = input.cuda()
+            target_var = target.cuda()
+            _, _, _, _, scores, predictions = model.forward(input_var)
+            (s_sorted, idx) = torch.sort(scores, 1, True)
+            top1.add_point(target, predictions.data, idx.data)
+            top5.add_point(target, predictions.data, idx.data)
 
     print("\ndone.")
     return (top1, top5)
