@@ -663,52 +663,65 @@ class imSituVerbFrameLocalRoleNounEncoder(imSituVerbFrameRoleNounEncoder):
 
 class imSituVerbLocalFrameRoleNounEncoder(imSituVerbFrameRoleNounEncoder):
 
-    def n_rolenoun(self): return self.total_rn
+    def n_framerole(self): return len(self.fr_id)
+    def n_framerolenoun(self): return self.total_frn
 
     def __init__(self, dataset):
         super(imSituVerbLocalFrameRoleNounEncoder, self).__init__(dataset)
-        self.r_n_id = {}
-        self.r_id_n = {}
+        self.fr_id = {}
+        self.id_fr = {}
 
-        self.total_rn = 0
+        self.fr_n_id = {}
+        self.fr_id_n = {}
+
+        self.total_frn = 0
+
+        for f in self.id_f:
+            for r in self.f_r[f]:
+                _id = len(self.fr_id)
+                self.fr_id[(f, r)] = _id
+                self.id_fr[_id] = (f, r)
 
         for (image, annotation) in dataset.items():
             v = self.v_id[annotation["verb"]]
-
             for frame in annotation["frames"]:
-                for(r, n) in frame.items():
+                f = self.f_id[frozenset([r for r in frame])]
+                for (r, n) in frame.items():
                     r = self.r_id[r]
+                    fr = self.fr_id[(f, r)]
                     n = self.n_id[n]
 
-                    if r not in self.r_n_id:
-                        self.r_n_id[r] = {}
-                        self.r_id_n[r] = {}
+                    if fr not in self.fr_n_id:
+                        self.fr_n_id[fr] = {}
+                        self.fr_id_n[fr] = {}
 
-                    if n not in self.r_n_id[r]:
-                        _id = len(self.r_n_id[r])
-                        self.r_n_id[r][n] = _id
-                        self.r_id_n[r][_id] = n
-                        self.total_rn += 1
+                    if n not in self.fr_n_id[fr]:
+                        _id = len(self.fr_n_id[fr])
+                        self.fr_n_id[fr][n] = _id
+                        self.fr_id_n[fr][_id] = n
+                        self.total_frn += 1
 
     def encode(self, situation):
         v = self.v_id[situation["verb"]]
         rv = {"verb": v, "frames": []}
         for frame in situation["frames"]:
             _e = []
+            f = self.f_id[frozenset([r for r in frame])]
             for (r, n) in frame.items():
-                if r not in self.r_id:
-                    r = self.unk_symbol()
+                r = self.r_id[r]
+                if (f, r) not in self.fr_id:
+                    fr = self.unk_symbol()
                 else:
-                    r = self.r_id[r]
+                    fr = self.fr_id[(f, r)]
                 if n not in self.n_id:
                     n = self.unk_symbol()
                 else:
                     n = self.n_id[n]
-                if n not in self.r_n_id[r]:
-                    rn = self.unk_symbol()
+                if n not in self.fr_n_id[fr]:
+                    frn = self.unk_symbol()
                 else:
-                    rn = self.r_n_id[r][n]
-                _e.append((r, rn))
+                    frn = self.fr_n_id[fr][n]
+                _e.append((fr, frn))
             rv["frames"].append(_e)
         return rv
 
@@ -718,16 +731,16 @@ class imSituVerbLocalFrameRoleNounEncoder(imSituVerbFrameRoleNounEncoder):
         rv = {"verb": verb, "frames": []}
         for frame in situation["frames"]:
             _fr = {}
-            for (r, rn) in frame:
-                rn = rn.item()
+            for (fr, frn) in frame:
+                frn = frn.item()
                 # print(self.vr_id_n)
-                if rn not in self.r_id_n[r]:
+                if frn not in self.fr_id_n[fr]:
                     print("index error, verb = {}".format(verb))
                     n = -1
                 else:
-                    n = self.id_n[self.r_id_n[r][rn]]
-                r = self.id_r[r]
-                _fr[r] = n
+                    n = self.id_n[self.fr_id_n[fr][frn]]
+                r = self.id_fr[fr]
+                _fr[fr] = n
             rv["frames"].append(_fr)
         return rv
 
