@@ -250,6 +250,7 @@ class BaselineRoleBottomUp(nn.Module):
         batch_size = image.size()[0]
 
         rep = self.cnn(image)
+        device = rep.device
         role_rep = [role_node(rep)
                     for role_node in self.role_node]
 
@@ -271,9 +272,9 @@ class BaselineRoleBottomUp(nn.Module):
         # concat role groups with the padding symbol
         zeros = Variable(torch.zeros(batch_size, 1))  # this is the padding
         zerosi = Variable(torch.LongTensor(batch_size, 1).zero_())
-        rn_marginal.insert(0, zeros.to(rep.device))
-        r_max.insert(0, zeros.to(rep.device))
-        r_maxi.insert(0, zerosi.to(rep.device))
+        rn_marginal.insert(0, zeros.to(device))
+        r_max.insert(0, zeros.to(device))
+        r_maxi.insert(0, zerosi.to(device))
 
         rn_marginal = torch.cat(rn_marginal, 1)
         r_max = torch.cat(r_max, 1)
@@ -288,13 +289,13 @@ class BaselineRoleBottomUp(nn.Module):
             batch_size, self.n_verbs, self.encoding.max_roles())
 
         rv_potential = torch.full((batch_size, self.encoding.n_roles(), self.n_verbs), float('-inf')
-                                  ).to(rn_marginal.device)
+                                  ).to(device)
         for i, rv_group in enumerate(self.linear_rv):
             _rv_potential = rv_group(role_rep[i])
             v_idx = torch.LongTensor(
-                self.encoding.r_v[i]).to(_rv_potential.device)
-            rv_potential[:, i].scatter_(
-                -1, v_idx[None, :].repeat(batch_size, 1), _rv_potential)
+                self.encoding.r_v[i]).to(device)
+            rv_potential[:, i, v_idx] = _rv_potential - \
+                _rv_potential.logsumexp(dim=1, keepdim=True)
         v_potential = rv_potential.logsumexp(dim=1)
 
         marginal = rn_marginal_grouped.sum(2).view(
