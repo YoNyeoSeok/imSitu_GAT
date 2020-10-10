@@ -460,7 +460,7 @@ def eval_model(dataset_loader, encoding, model, device):
 
 def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, encoding, optimizer, save_dir, device_array, args, timing=False):
     if args.use_wandb:
-        wandb.init(project='imSitu_YYS3', name='Frame_BottomUp', config=args)
+        wandb.init(project='imSitu_YYS3', name='Frame_BottomUp_Verbpad', config=args)
     model.train()
 
     time_all = time.time()
