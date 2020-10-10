@@ -223,19 +223,19 @@ class BaselineFrameBottomUp(nn.Module):
 
         # verb potential
         self.linear_fv = nn.ModuleList([
-            nn.Linear(node_size, len(fv))
-            for f, fv in self.encoding.f_v.items()])
+            nn.Linear(node_size, 1+len(self.encoding.f_v[f]))
+            for f in range(self.encoding.n_frames())])
         self.total_fv = 0
-        for _, fv in self.encoding.f_v.items():
-            self.total_fv += len(fv)
+        for f in range(self.encoding.n_frames()):
+            self.total_fv += 1+len(self.encoding.f_v[f])
 
         # role-noun potentials
         self.linear_rn = nn.ModuleList([
-            nn.Linear(node_size, len(rn))
-            for r, rn in self.encoding.r_id_n.items()])
+            nn.Linear(node_size, len(self.encoding.r_id_n[r]))
+            for r in range(self.encoding.n_roles())])
         self.total_rn = 0
-        for r, rn in self.encoding.r_id_n.items():
-            self.total_rn += len(rn)
+        for r in range(self.encoding.n_roles()):
+            self.total_rn += len(self.encoding.r_id_n[r])
 
         print("total fv: {0}, total rn : {1}, encoding rn : {2}".format(
             self.total_fv, self.total_rn, encoding.n_rolenoun()))
@@ -296,9 +296,13 @@ class BaselineFrameBottomUp(nn.Module):
                                   ).to(frn_marginal.device)
         for f, (fv_group, f_rep) in enumerate(zip(self.linear_fv, frame_rep)):
             _fv_potential = fv_group(f_rep)
+            _fv_potential_norm = _fv_potential - \
+                _fv_potential.logsumexp(dim=1, keepdim=True)
+            fv_potential[:, f] = _fv_potential_norm[
+                :, :1].repeat(1, self.n_verbs)
             v_idx = torch.LongTensor(
                 self.encoding.f_v[f]).to(_fv_potential.device)
-            fv_potential[:, f, v_idx] = _fv_potential
+            fv_potential[:, f, v_idx] = _fv_potential[:, 1:]
         v_potential = fv_potential.logsumexp(dim=1)
 
         marginal = frn_marginal_grouped.sum(2).view(
