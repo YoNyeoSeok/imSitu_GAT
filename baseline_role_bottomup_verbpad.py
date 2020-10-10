@@ -220,19 +220,19 @@ class BaselineRoleBottomUp(nn.Module):
 
         # verb potential
         self.linear_rv = nn.ModuleList([
-            nn.Linear(node_size, len(rv))
-            for r, rv in self.encoding.r_v.items()])
+            nn.Linear(node_size, 1+len(self.encoding.r_v[r]))
+            for r in range(self.encoding.n_roles())])
         self.total_rv = 0
-        for r, rv in self.encoding.r_v.items():
-            self.total_rv += len(rv)
+        for r in range(self.encoding.n_roles()):
+            self.total_rv += 1+len(self.encoding.r_v[r])
 
         # role-noun potentials
         self.linear_rn = nn.ModuleList([
-            nn.Linear(node_size, len(rn))
-            for r, rn in self.encoding.r_id_n.items()])
+            nn.Linear(node_size, len(self.encoding.r_id_n[r]))
+            for r in range(self.encoding.n_roles())])
         self.total_rn = 0
-        for r, rn in self.encoding.r_id_n.items():
-            self.total_rn += len(rn)
+        for r in range(self.encoding.n_roles()):
+            self.total_rn += len(self.encoding.r_id_n[r])
 
         print("total rv: {0}, total rn : {1}, encoding rn : {2}".format(
             self.total_rv, self.total_rn, encoding.n_rolenoun()))
@@ -288,14 +288,17 @@ class BaselineRoleBottomUp(nn.Module):
         r_maxi_grouped = r_maxi.index_select(1, v_r).view(
             batch_size, self.n_verbs, self.encoding.max_roles())
 
-        rv_potential = torch.full((batch_size, self.encoding.n_roles(), self.n_verbs), float('-inf')
-                                  ).to(device)
+        rv_potential = torch.full((batch_size, self.encoding.n_roles(), self.n_verbs),
+                                  float('-inf')).to(device)
         for i, rv_group in enumerate(self.linear_rv):
             _rv_potential = rv_group(role_rep[i])
+            _rv_potential_norm = _rv_potential - \
+                _rv_potential.logsumexp(dim=1, keepdim=True)
+            rv_potential[:, i] = _rv_potential_norm[
+                :, :1].repeat(1, self.n_verbs)
             v_idx = torch.LongTensor(
                 self.encoding.r_v[i]).to(device)
-            rv_potential[:, i, v_idx] = _rv_potential - \
-                _rv_potential.logsumexp(dim=1, keepdim=True)
+            rv_potential[:, i, v_idx] = _rv_potential_norm[:, 1:]
         v_potential = rv_potential.logsumexp(dim=1)
 
         marginal = rn_marginal_grouped.sum(2).view(
@@ -453,7 +456,8 @@ def eval_model(dataset_loader, encoding, model, device):
 
 def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, encoding, optimizer, save_dir, device_array, args, timing=False):
     if args.use_wandb:
-        wandb.init(project='imSitu_YYS3', name='Role_BottomUp', config=args)
+        wandb.init(project='imSitu_YYS3',
+                   name='Role_BottomUp_Verbpad', config=args)
     model.train()
 
     time_all = time.time()
