@@ -223,11 +223,11 @@ class BaselineFrameRoleBottomUp(nn.Module):
 
         # verb potential
         self.linear_fv = nn.ModuleList([
-            nn.Linear(node_size, len(self.encoding.f_v[f]))
+            nn.Linear(node_size, 1+len(self.encoding.f_v[f]))
             for f in range(self.encoding.n_frames())])
         self.total_fv = 0
         for f in range(self.encoding.n_frames()):
-            self.total_fv += len(self.encoding.f_v[f])
+            self.total_fv += 1+len(self.encoding.f_v[f])
 
         # frame-role-noun potentials
         self.linear_frn = nn.ModuleList([
@@ -295,9 +295,13 @@ class BaselineFrameRoleBottomUp(nn.Module):
                                   ).to(frn_marginal.device)
         for f, (fv_group, f_rep) in enumerate(zip(self.linear_fv, frame_rep)):
             _fv_potential = fv_group(f_rep)
+            _fv_potential_norm = _fv_potential - \
+                _fv_potential.logsumexp(dim=1, keepdim=True)
+            fv_potential[:, f] = _fv_potential_norm[
+                :, :1].repeat(1, self.n_verbs)
             v_idx = torch.LongTensor(
                 self.encoding.f_v[f]).to(_fv_potential.device)
-            fv_potential[:, f, v_idx] = _fv_potential
+            fv_potential[:, f, v_idx] = _fv_potential[:, 1:]
         v_potential = fv_potential.logsumexp(dim=1)
 
         marginal = frn_marginal_grouped.sum(2).view(
@@ -460,7 +464,7 @@ def eval_model(dataset_loader, encoding, model, device):
 def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, encoding, optimizer, save_dir, device_array, args, timing=False):
     if args.use_wandb:
         wandb.init(project='imSitu_YYS3',
-                   name='FrameRole_BottomUp', config=args)
+                   name='FrameRole_BottomUp_Verbpad', config=args)
     model.train()
 
     time_all = time.time()
