@@ -513,8 +513,10 @@ def eval_model(dataset_loader, encoding, model, eval_gpu):
     mx = len(dataset_loader)
     for i, (index, input, target) in enumerate(dataset_loader):
         print("{}/{} batches\r".format(i+1, mx)),
-        input_var = torch.autograd.Variable(input.cuda(eval_gpu), volatile=True)
-        target_var = torch.autograd.Variable(target.cuda(eval_gpu), volatile=True)
+        input_var = torch.autograd.Variable(
+            input.cuda(eval_gpu), volatile=True)
+        target_var = torch.autograd.Variable(
+            target.cuda(eval_gpu), volatile=True)
         (scores, predictions) = model.forward_max(input_var)
         (s_sorted, idx) = torch.sort(scores, 1, True)
         top1.add_point(target, predictions.data, idx.data)
@@ -591,7 +593,8 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
             if total_steps % eval_frequency == 0:
                 print("eval...")
                 etime = time.time()
-                (top1, top5) = eval_model(dev_loader, encoding, model, device_array[0])
+                (top1, top5) = eval_model(
+                    dev_loader, encoding, model, device_array[0])
                 model.train()
                 print("... done after {:.2f} s".format(time.time() - etime))
                 top1_a = top1.get_average_results()
