@@ -8,4 +8,4 @@ docker run -idt -w $WORKDIR -e "TERM=$TERM" \
 	-v=$CODEDIR:$WORKDIR/code \
 	--gpus all --shm-size 32g \
 	-v=$DATADIR:$WORKDIR/data:ro \
-	$NAME:devel /bin/bash -c "service ssh restart && /bin/bash"
+	$NAME:cuda10.0-devel /bin/bash -c "service ssh restart && /bin/bash"

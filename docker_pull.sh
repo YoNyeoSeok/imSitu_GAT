@@ -1,6 +1,6 @@
 NAME=imsitu
 
-IMAGE=yonyeoseok/$NAME:devel
+IMAGE=yonyeoseok/$NAME:cuda10.0-devel
 docker pull $IMAGE
 
 # add local user
