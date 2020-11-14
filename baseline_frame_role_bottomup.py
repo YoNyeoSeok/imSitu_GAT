@@ -474,14 +474,12 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
     avg_scores = []
 
     for k in range(0, max_epoch):
-        for i, (index, input, target) in enumerate(train_loader):
+        for i, (index, input_var, target) in enumerate(train_loader):
             total_steps += 1
 
             t0 = time.time()
             t1 = time.time()
 
-            input_var = torch.autograd.Variable(input)
-            target_var = torch.autograd.Variable(target)
             (_, v, rn, norm, scores, predictions) = pmodel(input_var)
             (s_sorted, idx) = torch.sort(scores, 1, True)
             # print norm
@@ -598,7 +596,6 @@ def main():
     parser.add_argument("--use_wandb", action='store_true')
 
     args = parser.parse_args()
-    device = torch.device(args.device_array[0])
     if args.command == "train":
         print("command = training")
         train_set = json.load(open(args.dataset_dir+"/train.json"))
@@ -628,7 +625,7 @@ def main():
         dev_loader = torch.utils.data.DataLoader(
             dataset_dev, batch_size=batch_size, shuffle=True)  # , num_workers = 3)
 
-        # model.cuda(args.device_array[0])
+        model.cuda(args.device_array[0])
         optimizer = optim.Adam(
             model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
         train_model(args.training_epochs, args.eval_frequency, train_loader,
