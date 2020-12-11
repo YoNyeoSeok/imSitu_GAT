@@ -527,7 +527,7 @@ def eval_model(dataset_loader, encoding, model, eval_gpu):
 
 def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, encoding, optimizer, save_dir, device_array, args, timing=False):
     if args.use_wandb:
-        wandb.init(project='imSitu_YYS3', name='CRF', config=args)
+        wandb.init(project='imSitu_YYS_V1', name='CRF', config=args)
     model.train()
 
     time_all = time.time()
@@ -639,6 +639,8 @@ def main():
                         help="location of images to process")
     parser.add_argument("--dataset_dir", default="./",
                         help="location of train.json, dev.json, ect.")
+    parser.add_argument("--dataset_postfix", default="_v1",
+                        help="dataset postfix for different version, _v1, etc.")
     parser.add_argument("--weights_file", help="the model to start from")
     parser.add_argument("--encoding_file",
                         help="a file corresponding to the encoder")
@@ -650,7 +652,7 @@ def main():
                         help="learning rate for ADAM", type=float)
     parser.add_argument("--weight_decay", default=5e-4,
                         help="learning rate decay for ADAM", type=float)
-    parser.add_argument("--eval_frequency", default=500,
+    parser.add_argument("--eval_frequency", default=100,
                         help="evaluate on dev set every N training steps", type=int)
     parser.add_argument("--training_epochs", default=20,
                         help="total number of training epochs", type=int)
@@ -664,8 +666,10 @@ def main():
     args = parser.parse_args()
     if args.command == "train":
         print("command = training")
-        train_set = json.load(open(args.dataset_dir+"/train.json"))
-        dev_set = json.load(open(args.dataset_dir+"/dev.json"))
+        train_set = json.load(
+            open(args.dataset_dir+"/train"+args.dataset_postfix+".json"))
+        dev_set = json.load(open(args.dataset_dir+"/dev" +
+                                 args.dataset_postfix+".json"))
 
         if args.encoding_file is None:
             encoder = imSituVerbRoleLocalNounEncoder(train_set)
