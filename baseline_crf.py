@@ -511,16 +511,15 @@ def eval_model(dataset_loader, encoding, model, eval_gpu):
     top5 = imSituTensorEvaluation(5, 3, encoding)
 
     mx = len(dataset_loader)
-    for i, (index, input, target) in enumerate(dataset_loader):
-        print("{}/{} batches\r".format(i+1, mx)),
-        input_var = torch.autograd.Variable(
-            input.cuda(eval_gpu), volatile=True)
-        target_var = torch.autograd.Variable(
-            target.cuda(eval_gpu), volatile=True)
-        (scores, predictions) = model.forward_max(input_var)
-        (s_sorted, idx) = torch.sort(scores, 1, True)
-        top1.add_point(target, predictions.data, idx.data)
-        top5.add_point(target, predictions.data, idx.data)
+    with torch.no_grad():
+        for i, (index, input, target) in enumerate(dataset_loader):
+            print("{}/{} batches\r".format(i+1, mx))
+            input_var = input.cuda(eval_gpu)
+            target_var = target.cuda(eval_gpu)
+            (scores, predictions) = model.forward_max(input_var)
+            (s_sorted, idx) = torch.sort(scores, 1, True)
+            top1.add_point(target, predictions.data, idx.data)
+            top5.add_point(target, predictions.data, idx.data)
 
     print("\ndone.")
     return (top1, top5)
@@ -542,14 +541,12 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
     avg_scores = []
 
     for k in range(0, max_epoch):
-        for i, (index, input, target) in enumerate(train_loader):
+        for i, (index, input_var, target) in enumerate(train_loader):
             total_steps += 1
 
             t0 = time.time()
             t1 = time.time()
 
-            input_var = torch.autograd.Variable(input)
-            target_var = torch.autograd.Variable(target)
             (_, v, vrn, norm, scores, predictions) = pmodel(input_var)
             (s_sorted, idx) = torch.sort(scores, 1, True)
             # print norm
