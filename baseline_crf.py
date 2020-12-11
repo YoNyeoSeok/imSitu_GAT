@@ -618,7 +618,7 @@ def train_model(max_epoch, eval_frequency, train_loader, dev_loader, model, enco
 
                 if maxv == avg_scores[-1]:
                     torch.save(model.state_dict(), save_dir +
-                               "/{0}.model".format(maxv))
+                               "/best.model".format(maxv))
                     print("new best model saved! {0}".format(maxv))
 
                 top1 = imSituTensorEvaluation(1, 3, encoding)
